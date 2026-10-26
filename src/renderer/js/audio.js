@@ -12,6 +12,12 @@
       this.ctx = new AudioContext({ latencyHint: 'interactive', sampleRate: 48000 });
       this.dest = this.ctx.createMediaStreamDestination();
       this.dest.channelCount = 2;
+      // Silence permanent : sans aucune source audio, la piste de sortie ne
+      // produirait aucun échantillon et l'encodeur attendrait indéfiniment.
+      const silence = this.ctx.createConstantSource();
+      silence.offset.value = 0;
+      silence.connect(this.dest);
+      silence.start();
 
       MS.on('runtime:ready', (rt) => {
         if (rt.hasAudio()) this.attach(rt);

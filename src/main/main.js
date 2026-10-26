@@ -1,10 +1,13 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain, desktopCapturer, dialog, shell, session, systemPreferences, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, desktopCapturer, dialog, shell, session, systemPreferences, Menu, net } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { spawn } = require('child_process');
+const restream = require('./restream');
+const browserSources = require('./browserSources');
+const encoders = require('./encoders');
 
 // Les sources média doivent pouvoir jouer du son sans interaction préalable.
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
@@ -127,37 +130,46 @@ function buildRecordOutput(out, opts) {
   startFfmpeg(out, args);
 }
 
-function buildStreamOutput(out, opts) {
+async function buildStreamOutput(out, opts) {
   if (!FFMPEG) throw new Error('FFmpeg est introuvable : le streaming est indisponible.');
   const s = opts.settings.stream;
   const fps = opts.settings.video.fps;
-  if (!s.server || !s.key) throw new Error('Serveur ou clé de stream manquant (Paramètres > Stream).');
-  const url = `${s.server.replace(/\/+$/, '')}/${s.key}`;
-  const vb = Number(s.videoBitrate) || 4500;
+  let url;
+  let secret;
+  if (s.service === 'restream') {
+    const ingest = await restream.ingestUrl(opts.settings.restream);
+    url = ingest.url;
+    secret = ingest.key;
+  } else {
+    if (!s.server || !s.key) throw new Error('Serveur ou clé de stream manquant (Paramètres > Stream).');
+    url = `${s.server.replace(/\/+$/, '')}/${s.key}`;
+    secret = s.key;
+  }
+  const available = await encoders.detect(FFMPEG);
+  const enc = s.encoder === 'auto' || !available.includes(s.encoder) ? available[0] : s.encoder;
+  out.encoder = enc;
   const args = [
     '-hide_banner', '-loglevel', 'error', '-nostats', '-progress', 'pipe:1',
     '-i', 'pipe:0',
-    '-c:v', 'libx264', '-preset', s.preset || 'veryfast', '-tune', 'zerolatency',
-    '-b:v', `${vb}k`, '-maxrate', `${vb}k`, '-bufsize', `${vb * 2}k`,
-    '-pix_fmt', 'yuv420p', '-r', String(fps), '-fps_mode', 'cfr',
-    '-g', String(fps * 2), '-sc_threshold', '0',
+    ...encoders.videoArgs(enc, { bitrate: Number(s.videoBitrate) || 4500, preset: s.preset, fps }),
+    '-r', String(fps), '-fps_mode', 'cfr',
     '-c:a', 'aac', '-b:a', `${Number(s.audioBitrate) || 160}k`, '-ar', '48000', '-ac', '2',
     '-f', 'flv', url,
   ];
-  startFfmpeg(out, args, s.key);
+  startFfmpeg(out, args, secret);
 }
 
 ipcMain.handle('output:start', async (_e, opts) => {
   const out = { id: nextOutputId++, kind: opts.kind, bytes: 0, stopping: false, closed: false };
   try {
     if (opts.kind === 'record') buildRecordOutput(out, opts);
-    else if (opts.kind === 'stream') buildStreamOutput(out, opts);
+    else if (opts.kind === 'stream') await buildStreamOutput(out, opts);
     else throw new Error(`Sortie inconnue : ${opts.kind}`);
   } catch (e) {
     return { ok: false, error: e.message };
   }
   outputs.set(out.id, out);
-  return { ok: true, id: out.id, file: out.file || null };
+  return { ok: true, id: out.id, file: out.file || null, encoder: out.encoder || null };
 });
 
 ipcMain.on('output:chunk', (_e, id, data) => {
@@ -233,9 +245,64 @@ ipcMain.handle('dialog:chooseDir', async (_e, defaultPath) => {
 
 ipcMain.handle('shell:openPath', (_e, p) => shell.openPath(p || app.getPath('videos')));
 ipcMain.handle('shell:showItem', (_e, p) => shell.showItemInFolder(p));
+ipcMain.handle('shell:openExternal', (_e, url) => {
+  if (/^https:\/\//i.test(url)) shell.openExternal(url);
+});
+
+/* ------------------------------------------------------------------ */
+/* Restream, chat et sources navigateur                                */
+/* ------------------------------------------------------------------ */
+
+ipcMain.handle('encoders:list', async () => {
+  const list = await encoders.detect(FFMPEG);
+  return list.map((id) => ({ id, label: encoders.LABELS[id] || id }));
+});
+
+ipcMain.handle('restream:test', async (_e, cfg) => {
+  try {
+    const [ingest, st] = await Promise.all([restream.ingestUrl(cfg), restream.status(cfg)]);
+    return { ok: true, ingest: ingest.url.replace(ingest.key, '****'), status: st };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('restream:status', async (_e, cfg) => {
+  try {
+    return { ok: true, status: await restream.status(cfg) };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+const restreamChat = new restream.ChatStream(
+  (msg) => send('chat:message', msg),
+  (status, error) => send('chat:status', { platform: 'restream', status, error: error || null })
+);
+ipcMain.on('restream:chat', (_e, enabled, cfg) => {
+  if (enabled) restreamChat.start(cfg);
+  else restreamChat.stop();
+});
+
+// Kick protège son API par Cloudflare : on passe par la pile réseau de
+// Chromium (net.fetch), plus proche d'un vrai navigateur que Node.
+ipcMain.handle('kick:chatroom', async (_e, channel) => {
+  const slug = String(channel || '').trim().toLowerCase().replace(/^.*kick\.com\//, '').replace(/[^a-z0-9_-]/g, '');
+  if (!slug) throw new Error('Nom de chaîne Kick vide.');
+  const res = await net.fetch(`https://kick.com/api/v2/channels/${slug}`, { headers: { Accept: 'application/json' } });
+  if (!res.ok) throw new Error(`Kick a répondu ${res.status}. Renseigne l'ID du salon de chat manuellement.`);
+  const data = await res.json();
+  if (!data.chatroom || !data.chatroom.id) throw new Error('Salon de chat introuvable.');
+  return data.chatroom.id;
+});
+
+ipcMain.on('browser:create', (_e, id, opts) => browserSources.create(id, opts, send));
+ipcMain.on('browser:destroy', (_e, id) => browserSources.destroy(id));
+ipcMain.on('browser:reload', (_e, id) => browserSources.reload(id));
 
 ipcMain.handle('app:info', () => ({
   version: app.getVersion(),
+  defaultBrowserCss: browserSources.DEFAULT_CSS,
   platform: process.platform,
   ffmpeg: Boolean(FFMPEG),
   videosPath: app.getPath('videos'),
@@ -278,6 +345,8 @@ function createWindow() {
   win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
   win.on('closed', () => {
     win = null;
+    browserSources.destroyAll();
+    restreamChat.stop();
   });
 }
 
@@ -304,8 +373,9 @@ if (!app.requestSingleInstanceLock()) {
     }
 
     createWindow();
+    if (FFMPEG) encoders.detect(FFMPEG);
     app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) createWindow();
+      if (!win) createWindow();
     });
   });
 

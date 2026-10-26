@@ -295,6 +295,204 @@
     }
   }
 
+  /** Chat incrusté : dessiné nativement, mis à jour uniquement à l'arrivée d'un message. */
+  class ChatRuntime extends CanvasRuntime {
+    async start() {
+      await super.start();
+      this.onMessage = () => this.update();
+      MS.on('chat:message', this.onMessage);
+      MS.on('chat:cleared', this.onMessage);
+      this.timer = setInterval(() => this.src.settings.lifetime > 0 && this.update(), 250);
+    }
+
+    update() {
+      const s = this.src.settings;
+      const c = this.canvas;
+      const W = Math.max(50, Number(s.width) || 400);
+      const H = Math.max(50, Number(s.height) || 600);
+      if (c.width !== W || c.height !== H) {
+        c.width = W;
+        c.height = H;
+      }
+      const ctx = c.getContext('2d');
+      ctx.clearRect(0, 0, W, H);
+      if (s.bgOpacity > 0) {
+        ctx.fillStyle = MS.hexToRgba(s.bgColor, s.bgOpacity / 100);
+        ctx.fillRect(0, 0, W, H);
+      }
+      const size = Math.max(8, Number(s.fontSize) || 22);
+      const lineH = Math.round(size * 1.35);
+      const pad = Math.round(size * 0.5);
+      const font = (bold) => `${bold ? '700' : '400'} ${size}px "${s.font}", sans-serif`;
+      const now = Date.now();
+      const life = (Number(s.lifetime) || 0) * 1000;
+
+      let y = H - pad;
+      const msgs = MS.chat ? MS.chat.messages : [];
+      for (let i = msgs.length - 1; i >= 0 && y > 0; i--) {
+        const m = msgs[i];
+        if (m.divider || (m.system && !s.showSystem)) continue;
+        let alpha = 1;
+        if (life > 0) {
+          const age = now - m.at;
+          if (!m.at || age > life) continue;
+          alpha = Math.min(1, (life - age) / 1000);
+        }
+        const rows = this.layout(ctx, m, W - pad * 2, size, font);
+        if (y - rows.length * lineH < 0) break; // pas de message coupé en haut
+        y -= rows.length * lineH;
+        ctx.globalAlpha = alpha;
+        rows.forEach((row, r) => {
+          for (const seg of row) this.drawSegment(ctx, seg, pad, y + r * lineH + lineH / 2, size, font);
+        });
+        y -= Math.round(size * 0.3);
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    /** Découpe un message en lignes de segments (icône, badges, pseudo, mots). */
+    layout(ctx, m, maxW, size, font) {
+      const s = this.src.settings;
+      const tokens = [];
+      if (m.system) {
+        tokens.push({ kind: 'text', text: `[${m.platform}]`, color: '#9aa0b4', bold: true });
+      } else {
+        if (s.showIcons && MS.PLATFORM_ICONS[m.platform]) tokens.push({ kind: 'icon', platform: m.platform, w: size });
+        if (s.showBadges) {
+          for (const b of m.badges || []) {
+            const label = MS.BADGE_LABELS[b.type] || b.title || b.type;
+            ctx.font = `700 ${Math.round(size * 0.6)}px sans-serif`;
+            tokens.push({ kind: 'badge', text: label, w: ctx.measureText(label).width + size * 0.5 });
+          }
+        }
+        tokens.push({ kind: 'text', text: m.username, color: m.color || s.nameColor, bold: true });
+        tokens.push({ kind: 'text', text: ':', color: s.textColor, bold: false });
+      }
+      for (const word of String(m.message || '').split(/\s+/).filter(Boolean)) tokens.push({ kind: 'text', text: word, color: s.textColor, bold: false });
+
+      const gap = size * 0.3;
+      const rows = [[]];
+      let x = 0;
+      for (const t of tokens) {
+        if (t.kind === 'text') {
+          ctx.font = font(t.bold);
+          t.w = ctx.measureText(t.text).width;
+        }
+        const space = x > 0 && !(t.text === ':') ? gap : 0;
+        if (x > 0 && x + space + t.w > maxW) {
+          rows.push([]);
+          x = 0;
+        } else {
+          x += space;
+        }
+        t.x = x;
+        rows[rows.length - 1].push(t);
+        x += t.w;
+      }
+      return rows;
+    }
+
+    drawSegment(ctx, t, ox, cy, size, font) {
+      const x = ox + t.x;
+      if (t.kind === 'icon') {
+        ctx.save();
+        ctx.translate(x, cy - size / 2);
+        ctx.scale(size / 24, size / 24);
+        ctx.fillStyle = MS.PLATFORM_COLORS[t.platform];
+        ctx.fill(new Path2D(MS.PLATFORM_ICONS[t.platform]));
+        ctx.restore();
+      } else if (t.kind === 'badge') {
+        const h = size * 0.85;
+        ctx.fillStyle = 'rgba(76, 125, 255, 0.85)';
+        ctx.beginPath();
+        ctx.roundRect(x, cy - h / 2, t.w, h, h / 4);
+        ctx.fill();
+        ctx.fillStyle = '#fff';
+        ctx.font = `700 ${Math.round(size * 0.6)}px sans-serif`;
+        ctx.textBaseline = 'middle';
+        ctx.fillText(t.text, x + size * 0.25, cy);
+      } else {
+        ctx.font = font(t.bold);
+        ctx.textBaseline = 'middle';
+        if (this.src.settings.shadow) {
+          ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
+          ctx.shadowBlur = size * 0.2;
+          ctx.shadowOffsetY = 1;
+        }
+        ctx.fillStyle = t.color;
+        ctx.fillText(t.text, x, cy);
+        ctx.shadowColor = 'transparent';
+      }
+    }
+
+    dispose() {
+      super.dispose();
+      clearInterval(this.timer);
+      MS.off('chat:message', this.onMessage);
+      MS.off('chat:cleared', this.onMessage);
+    }
+  }
+
+  /** Page web rendue hors écran par le processus principal. */
+  class BrowserRuntime extends BaseRuntime {
+    async start() {
+      this.canvas = document.createElement('canvas');
+      this.ctx = this.canvas.getContext('2d');
+      this.signature = this.sig();
+      window.api.browserCreate(this.src.id, { ...this.src.settings });
+    }
+    sig() {
+      const s = this.src.settings;
+      return JSON.stringify([s.url, s.width, s.height, s.fps, s.css, s.audio]);
+    }
+    update() {
+      if (this.sig() === this.signature) return;
+      this.signature = this.sig();
+      window.api.browserCreate(this.src.id, { ...this.src.settings });
+    }
+    onFrame({ width, height, data }) {
+      if (this.disposed) return;
+      if (this.canvas.width !== width || this.canvas.height !== height) {
+        this.canvas.width = width;
+        this.canvas.height = height;
+        this.image = null;
+      }
+      if (!this.image) this.image = new ImageData(width, height);
+      // Chromium fournit du BGRA : conversion en RGBA, 32 bits à la fois.
+      const bytes = data.byteOffset % 4 ? new Uint8Array(data) : data;
+      const src = new Uint32Array(bytes.buffer, bytes.byteOffset, width * height);
+      const dst = new Uint32Array(this.image.data.buffer);
+      for (let i = 0; i < src.length; i++) {
+        const p = src[i];
+        dst[i] = (p & 0xff00ff00) | ((p & 0xff) << 16) | ((p >>> 16) & 0xff);
+      }
+      this.ctx.putImageData(this.image, 0, 0);
+      if (!this.ready) this.markReady();
+    }
+    get width() {
+      return this.ready ? this.canvas.width : 0;
+    }
+    get height() {
+      return this.ready ? this.canvas.height : 0;
+    }
+    drawable() {
+      return this.ready ? this.canvas : null;
+    }
+    dispose() {
+      super.dispose();
+      window.api.browserDestroy(this.src.id);
+    }
+  }
+
+  window.api.onBrowserFrame((f) => {
+    const rt = MS.runtimes.get(f.id);
+    if (rt && rt.onFrame) rt.onFrame(f);
+  });
+  window.api.onBrowserError((e) => {
+    const rt = MS.runtimes.get(e.id);
+    if (rt) rt.fail(new Error(e.error));
+  });
+
   /* Listes de périphériques ------------------------------------------- */
 
   async function deviceOptions(kind, withDefault) {
@@ -438,6 +636,59 @@
         { key: 'bgColor', type: 'color', label: 'Couleur de fond' },
         { key: 'bgOpacity', type: 'range', label: 'Opacité du fond (%)', min: 0, max: 100 },
       ],
+    },
+    chat: {
+      label: 'Chat du stream',
+      glyph: '💬',
+      live: true,
+      defaults: () => ({
+        width: 450,
+        height: 600,
+        font: 'Segoe UI',
+        fontSize: 24,
+        textColor: '#ffffff',
+        nameColor: '#4c7dff',
+        bgColor: '#000000',
+        bgOpacity: 0,
+        lifetime: 0,
+        showIcons: true,
+        showBadges: true,
+        showSystem: false,
+        shadow: true,
+      }),
+      create: (src) => new ChatRuntime(src),
+      fields: () => [
+        { type: 'info', text: 'Affiche les messages du chat (Paramètres > Chat) directement dans la scène.' },
+        { key: 'width', type: 'number', label: 'Largeur', min: 100, max: 3840 },
+        { key: 'height', type: 'number', label: 'Hauteur', min: 100, max: 2160 },
+        { key: 'font', type: 'select', label: 'Police', options: FONTS.map((f) => ({ value: f, label: f })) },
+        { key: 'fontSize', type: 'number', label: 'Taille du texte', min: 8, max: 96 },
+        { key: 'textColor', type: 'color', label: 'Couleur du texte' },
+        { key: 'nameColor', type: 'color', label: 'Couleur des pseudos (si aucune)' },
+        { key: 'bgColor', type: 'color', label: 'Couleur de fond' },
+        { key: 'bgOpacity', type: 'range', label: 'Opacité du fond (%)', min: 0, max: 100 },
+        { key: 'lifetime', type: 'number', label: 'Masquer les messages après (s, 0 = jamais)', min: 0, max: 3600 },
+        { key: 'showIcons', type: 'checkbox', label: 'Logo de la plateforme' },
+        { key: 'showBadges', type: 'checkbox', label: 'Badges (modo, abonné…)' },
+        { key: 'showSystem', type: 'checkbox', label: 'Messages système' },
+        { key: 'shadow', type: 'checkbox', label: 'Ombre du texte' },
+      ],
+    },
+    browser: {
+      label: 'Navigateur',
+      glyph: '🌐',
+      defaults: () => ({ url: '', width: 800, height: 600, fps: 30, css: MS.appInfo.defaultBrowserCss, audio: false }),
+      create: (src) => new BrowserRuntime(src),
+      fields: () => [
+        { key: 'url', type: 'text', label: 'URL (ou chemin d’un fichier HTML local)', placeholder: 'https://…' },
+        { key: 'width', type: 'number', label: 'Largeur', min: 16, max: 4096 },
+        { key: 'height', type: 'number', label: 'Hauteur', min: 16, max: 4096 },
+        { key: 'fps', type: 'number', label: 'Images par seconde', min: 1, max: 60 },
+        { key: 'audio', type: 'checkbox', label: 'Jouer le son de la page (sortie du PC)' },
+        { key: 'css', type: 'textarea', label: 'CSS personnalisé' },
+        { type: 'info', text: 'Idéal pour les alertes (StreamElements, Streamlabs…) ou le chat de Restream (/chat.html).' },
+      ],
+      actions: [{ label: 'Actualiser la page', run: (src) => window.api.browserReload(src.id) }],
     },
     color: {
       label: 'Source de couleur',

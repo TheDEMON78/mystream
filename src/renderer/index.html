@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: file:; media-src 'self' blob: file: mediastream:; font-src 'self' data:"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: file: https:; media-src 'self' blob: file: mediastream:; font-src 'self' data:; connect-src 'self' wss://irc-ws.chat.twitch.tv wss://ws-us2.pusher.com"
     />
     <title>MyStream</title>
     <link rel="stylesheet" href="styles.css" />
@@ -13,14 +13,50 @@
     <div id="app">
       <header id="topbar">
         <div class="brand"><span class="logo-dot"></span>MyStream <span id="app-version" class="version"></span></div>
-        <div class="scene-now">Scène : <strong id="scene-label"></strong></div>
+        <nav class="menubar">
+          <button data-menu="file">Fichier</button>
+          <button data-menu="view">Affichage</button>
+          <button data-menu="docks">Docks</button>
+          <button data-menu="help">Aide</button>
+        </nav>
+        <div class="scene-now">À l'antenne : <strong id="scene-label"></strong></div>
       </header>
 
-      <main id="preview-area">
-        <div id="preview-wrap">
-          <canvas id="program"></canvas>
-          <canvas id="overlay"></canvas>
+      <main id="main">
+        <div id="preview-col">
+          <div id="preview-area">
+            <div class="pane" id="studio-pane">
+              <div class="pane-label">Aperçu</div>
+              <div id="studio-wrap" class="canvas-wrap"><canvas id="studio-canvas"></canvas></div>
+            </div>
+            <div id="studio-mid">
+              <button class="btn primary" data-act="transition">Transition ➜</button>
+            </div>
+            <div class="pane" id="program-pane">
+              <div class="pane-label">Programme</div>
+              <div id="preview-wrap" class="canvas-wrap">
+                <canvas id="program"></canvas>
+                <canvas id="overlay"></canvas>
+              </div>
+            </div>
+          </div>
+          <div id="preview-toolbar">
+            <span id="selected-label">Aucune source sélectionnée</span>
+            <button class="btn small" data-act="source-props">Propriétés</button>
+            <button class="btn small" data-act="source-filters">Filtres</button>
+          </div>
         </div>
+
+        <aside class="dock" id="dock-chat">
+          <div class="dock-title">
+            Chat
+            <span class="spacer"></span>
+            <button class="tool" data-act="chat-clear" title="Effacer">⌫</button>
+            <button class="tool" data-act="chat-settings" title="Paramètres du chat">⚙</button>
+          </div>
+          <div id="chat-status"></div>
+          <div id="chat-list"></div>
+        </aside>
       </main>
 
       <section id="docks">
@@ -74,6 +110,7 @@
           <div class="dock-body controls">
             <button id="btn-stream" class="btn big" data-act="stream">Démarrer le streaming</button>
             <button id="btn-record" class="btn big" data-act="record">Démarrer l'enregistrement</button>
+            <button id="btn-studio" class="btn big" data-act="studio">Mode studio</button>
             <button class="btn big" data-act="folder">Dossier des enregistrements</button>
             <button class="btn big" data-act="settings">Paramètres</button>
             <button class="btn big" data-act="quit">Quitter</button>
@@ -85,6 +122,7 @@
         <span id="status-fps"></span>
         <span class="spacer"></span>
         <span id="status-perf"></span>
+        <span id="status-restream" class="badge" hidden></span>
         <span id="status-live" class="badge">LIVE 00:00:00</span>
         <span id="status-rec" class="badge">REC 00:00:00</span>
       </footer>
@@ -96,6 +134,7 @@
 
     <script src="js/util.js"></script>
     <script src="js/store.js"></script>
+    <script src="js/chat.js"></script>
     <script src="js/sources.js"></script>
     <script src="js/audio.js"></script>
     <script src="js/compositor.js"></script>

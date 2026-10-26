@@ -30,6 +30,7 @@
       if (!res.ok) throw new Error(res.error);
       this.id = res.id;
       this.file = res.file;
+      this.encoder = res.encoder;
 
       // Le flux de streaming est réencodé par FFmpeg : on lui envoie une source de haute qualité.
       const vb = this.kind === 'record' ? settings.output.videoBitrate : Math.max(settings.stream.videoBitrate * 2, 8000);
@@ -105,6 +106,10 @@
         await out.start(this.stream());
         this.active[kind] = out;
         if (kind === 'record') MS.toast(`Enregistrement démarré : ${out.file}`, 'info', 3500);
+        else {
+          const enc = (MS.encoders.find((e) => e.id === out.encoder) || { label: out.encoder }).label;
+          MS.toast(`Streaming démarré · encodeur ${enc}`, 'info', 3500);
+        }
       } catch (e) {
         if (out.id) window.api.outputStop(out.id);
         MS.toast(`Impossible de démarrer ${LABELS[kind]} : ${e.message}`, 'error', 8000);

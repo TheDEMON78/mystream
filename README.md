@@ -6,19 +6,27 @@ Composez vos scènes à partir de plusieurs sources (écran, webcam, images, vid
 ## Fonctionnalités
 
 - **Scènes** : création, renommage (double-clic), suppression, réorganisation, transitions *Fondu* ou *Coupure* avec durée réglable.
+- **Mode studio** : aperçu et programme côte à côte, bouton *Transition* pour passer l'aperçu à l'antenne (double-clic sur une scène = à l'antenne).
 - **Sources** :
   - Capture d'écran / de fenêtre (sélecteur avec miniatures)
   - Périphérique de capture vidéo (webcam, carte d'acquisition) avec choix de résolution et de FPS
   - Capture d'entrée audio (micro) et audio du bureau (Windows)
   - Image, source média (vidéo/audio, lecture en boucle)
   - Texte (police, taille, couleur, contour, fond, alignement) et source de couleur
+  - **Chat du stream** incrusté à l'écran (logos Twitch/Kick, badges, disparition automatique des anciens messages)
+  - **Navigateur** : n'importe quelle page web (alertes StreamElements/Streamlabs, widgets…), fond transparent, CSS personnalisé
   - Réutilisation d'une source existante dans plusieurs scènes
 - **Aperçu interactif** : sélection, déplacement, redimensionnement à la souris (poignées, `Maj` pour déformer, `Alt` pour désactiver l'aimantation), flèches du clavier, `Suppr`, menu contextuel (ajuster/étirer/centrer à l'écran, taille d'origine, ordre, verrouillage).
+- **Filtres par source** : opacité, luminosité, contraste, saturation, teinte, recadrage, miroir et **incrustation fond vert** (calculée sur la carte graphique).
+- **Dock Chat** : chat Twitch + Kick en direct à côté de l'aperçu, via Restream ou en lecture directe (sans compte).
 - **Mixeur audio** : VU-mètres, faders, muet, écoute (monitoring) par source ; sources globales *Mic/Aux* et *Audio du bureau*.
-- **Streaming RTMP/RTMPS** : Twitch, YouTube, Kick, Facebook Live ou serveur personnalisé, encodage x264 + AAC via FFmpeg, débit affiché en direct.
+- **Streaming RTMP/RTMPS** : Twitch, YouTube, Kick, Facebook Live ou serveur personnalisé, débit affiché en direct.
+- **Encodeur matériel** détecté automatiquement (NVIDIA NVENC, Intel Quick Sync, AMD AMF, Apple VideoToolbox), sinon x264.
+- **Intégration [Restream](https://github.com/TheDEMON78/restream)** : choisir le service *Restream (BloopStudio)* suffit, MyStream récupère tout seul l'adresse et la clé d'ingestion, affiche l'état des relais Twitch/Kick dans la barre d'état et le chat agrégé dans le dock.
 - **Enregistrement** : MP4 (H.264/AAC), MKV ou WebM, dossier configurable.
 - **Paramètres** : résolution du canevas (dont vertical 1080×1920), FPS, débits, préréglage x264, périphérique micro.
-- **Barre d'état** : FPS de rendu, images en retard, CPU/mémoire, durée du live et de l'enregistrement.
+- **Barre d'état** : FPS de rendu (cadence exacte, jamais au-dessus de la valeur demandée), images manquées, CPU/mémoire, durée du live et de l'enregistrement.
+- **Menus et docks** : Fichier / Affichage / Docks / Aide, chaque dock peut être masqué.
 - Configuration (scènes, sources, réglages) sauvegardée automatiquement.
 
 ## Téléchargement
@@ -30,6 +38,16 @@ Les versions compilées sont publiées automatiquement dans les [Releases](https
 | Windows | `MyStream-x.y.z-win-setup.exe` (installateur) ou `-win-portable.exe` |
 | Linux | `.AppImage` ou `.deb` |
 | macOS | `.dmg` (non signé : clic droit → *Ouvrir* au premier lancement) |
+
+## Utiliser MyStream avec Restream
+
+1. Lance Restream (`npm start` ou `start.bat`).
+2. Dans MyStream : **Paramètres > Restream**, renseigne l'adresse de l'interface (`http://localhost:3050` par défaut) et le mot de passe si `WEB_PASSWORD` est défini, puis **Tester la connexion**.
+3. **Paramètres > Stream** : choisis le service **Restream (BloopStudio)**.
+4. **Paramètres > Chat** : choisis **Restream** pour afficher le chat Twitch + Kick (avec les vrais badges Twitch).
+5. Démarre le streaming : Restream relaie le flux vers Twitch et Kick sans le réencoder.
+
+Pour incruster le chat dans le stream, ajoute une source **Chat du stream** à ta scène.
 
 ## Développement
 
@@ -48,6 +66,9 @@ npm run dist     # génère les installateurs pour le système courant dans dist
 src/
 ├── main/
 │   ├── main.js        # processus principal : fenêtre, configuration, capture d'écran, FFmpeg
+│   ├── restream.js    # client Restream : adresse d'ingestion, état des relais, chat (SSE)
+│   ├── browserSources.js # sources Navigateur rendues hors écran
+│   ├── encoders.js    # détection des encodeurs matériels
 │   └── preload.js     # pont sécurisé (contextBridge) entre l'interface et le processus principal
 ├── renderer/
 │   ├── index.html, styles.css
@@ -55,7 +76,8 @@ src/
 │       ├── store.js       # modèle de données (scènes, sources, éléments, réglages)
 │       ├── sources.js     # types de sources et leurs moteurs (webcam, écran, image, texte…)
 │       ├── audio.js       # mixeur Web Audio et sources audio globales
-│       ├── compositor.js  # rendu des scènes dans le canevas, transitions
+│       ├── chat.js        # chat : Restream, Twitch (IRC anonyme), Kick (Pusher)
+│       ├── compositor.js  # rendu des scènes, cadence d'images, filtres, incrustation, mode studio
 │       ├── preview.js     # interactions de l'aperçu (sélection, déplacement, redimensionnement)
 │       ├── outputs.js     # enregistrement et streaming (MediaRecorder → FFmpeg)
 │       ├── dialogs.js     # fenêtres modales, propriétés, paramètres

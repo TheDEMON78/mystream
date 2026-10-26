@@ -12,8 +12,11 @@
       this.mixer = MS.$('#mixer');
       this.ctxMenu = MS.$('#ctx-menu');
 
+      this.chatList = MS.$('#chat-list');
       this.bindToolbar();
+      this.bindMenus();
       this.renderTransitions();
+      this.applyDocks();
 
       MS.on('scenes:changed', () => this.renderScenes());
       MS.on('scene:switched', () => {
@@ -21,6 +24,18 @@
         this.renderSources();
         this.renderMixer();
       });
+      for (const evt of ['preview:switched', 'studio:changed']) {
+        MS.on(evt, () => {
+          this.renderScenes();
+          this.renderSources();
+          this.renderControls();
+        });
+      }
+      for (const evt of ['selection:changed', 'items:changed', 'sources:changed', 'scene:switched', 'preview:switched']) MS.on(evt, () => this.renderPreviewBar());
+      MS.on('chat:message', (m) => this.appendChat(m));
+      MS.on('chat:cleared', () => this.renderChat());
+      MS.on('chat:status', () => this.renderChatStatus());
+      MS.on('settings:changed', () => this.renderChatStatus());
       for (const evt of ['items:changed', 'sources:changed', 'selection:changed', 'runtime:error', 'runtime:ready']) MS.on(evt, () => this.renderSources());
       for (const evt of ['mixer:changed', 'items:changed', 'sources:changed']) MS.on(evt, () => this.renderMixer());
       MS.on('outputs:changed', () => this.renderControls());
@@ -34,6 +49,9 @@
       this.renderSources();
       this.renderMixer();
       this.renderControls();
+      this.renderPreviewBar();
+      this.renderChat();
+      this.renderChatStatus();
       this.meterLoop();
       this.statusLoop();
     },
@@ -42,15 +60,15 @@
       const actions = {
         'scene-add': async () => {
           const name = await MS.prompt('Ajouter une scène', 'Nom de la scène', store().uniqueName('Scène', store().data.scenes.map((s) => s.name)));
-          if (name) MS.compositor.switchScene(store().addScene(name).id);
+          if (name) this.activateScene(store().addScene(name).id);
         },
         'scene-remove': async () => {
-          const scene = store().currentScene();
+          const scene = store().editScene();
           if (store().data.scenes.length <= 1) return MS.toast('Il doit rester au moins une scène.', 'error');
           if (await MS.confirm('Supprimer la scène', `Supprimer « ${scene.name} » ?`, 'Supprimer')) store().removeScene(scene.id);
         },
-        'scene-up': () => store().moveScene(store().data.currentSceneId, -1),
-        'scene-down': () => store().moveScene(store().data.currentSceneId, 1),
+        'scene-up': () => store().moveScene(store().editScene().id, -1),
+        'scene-down': () => store().moveScene(store().editScene().id, 1),
         'source-add': (e) => this.addSourceMenu(e.currentTarget),
         'source-remove': () => {
           const item = MS.preview.selectedItem();
@@ -60,6 +78,14 @@
           const item = MS.preview.selectedItem();
           if (item) MS.openProperties(item.sourceId);
         },
+        'source-filters': () => {
+          const item = MS.preview.selectedItem();
+          if (item) MS.openFilters(item.sourceId);
+        },
+        studio: () => store().setStudio(!store().settings.ui.studio),
+        transition: () => MS.compositor.switchScene(store().data.previewSceneId),
+        'chat-clear': () => MS.chat.clear(),
+        'chat-settings': () => MS.openSettings('chat'),
         'source-up': () => this.moveSelected(-1),
         'source-down': () => this.moveSelected(1),
         stream: () => MS.outputs.toggle('stream'),
@@ -75,7 +101,7 @@
 
     moveSelected(delta) {
       const item = MS.preview.selectedItem();
-      if (item) store().moveItem(store().data.currentSceneId, item.id, delta);
+      if (item) store().moveItem(store().editScene().id, item.id, delta);
     },
 
     async removeItem(item) {
@@ -83,25 +109,48 @@
       const ok = await MS.confirm('Supprimer la source', `Supprimer « ${src ? src.name : 'source'} » de la scène ?`, 'Supprimer');
       if (!ok) return;
       MS.preview.select(null);
-      store().removeItem(store().data.currentSceneId, item.id);
+      store().removeItem(store().editScene().id, item.id);
+    },
+
+    /** Clic sur une scène : en mode studio elle va dans l'aperçu, sinon directement à l'antenne. */
+    activateScene(id) {
+      if (store().settings.ui.studio) store().setPreviewScene(id);
+      else MS.compositor.switchScene(id);
     },
 
     /* Scènes ----------------------------------------------------------- */
     renderScenes() {
-      const cur = store().data.currentSceneId;
+      const program = store().data.currentSceneId;
+      const studio = store().settings.ui.studio;
+      const edit = store().editScene().id;
+      const rename = async (s) => {
+        const name = await MS.prompt('Renommer la scène', 'Nom', s.name);
+        if (name) store().renameScene(s.id, name);
+      };
       this.sceneList.replaceChildren(
         ...store().data.scenes.map((s) =>
           el(
             'li',
             {
-              class: s.id === cur ? 'active' : '',
-              onclick: () => MS.compositor.switchScene(s.id),
-              ondblclick: async () => {
-                const name = await MS.prompt('Renommer la scène', 'Nom', s.name);
-                if (name) store().renameScene(s.id, name);
+              class: `${s.id === edit ? 'active' : ''} ${studio && s.id === program ? 'on-air' : ''}`,
+              onclick: () => this.activateScene(s.id),
+              // En mode studio, comme OBS : double-clic = passer la scène à l'antenne.
+              ondblclick: () => (studio ? MS.compositor.switchScene(s.id) : rename(s)),
+              oncontextmenu: (e) => {
+                e.preventDefault();
+                this.showMenu(
+                  [
+                    { label: 'Renommer…', action: () => rename(s) },
+                    { label: 'Passer à l’antenne', action: () => MS.compositor.switchScene(s.id) },
+                    { label: 'Supprimer', action: () => MS.$('[data-act="scene-remove"]').click() },
+                  ],
+                  e.clientX,
+                  e.clientY
+                );
               },
             },
-            el('span', { class: 'name', text: s.name })
+            el('span', { class: 'name', text: s.name }),
+            studio && s.id === program ? el('span', { class: 'live-dot', title: 'À l’antenne' }) : null
           )
         )
       );
@@ -110,7 +159,7 @@
 
     /* Sources ---------------------------------------------------------- */
     renderSources() {
-      const scene = store().currentScene();
+      const scene = store().editScene();
       if (!scene) return;
       const sel = MS.preview.selectedId;
       if (!scene.items.length) {
@@ -175,7 +224,7 @@
       const entries = Object.entries(MS.SourceTypes)
         .filter(([key]) => key !== 'desktop_audio' || platform === 'win32')
         .map(([key, t]) => ({ label: `${t.glyph}  ${t.label}`, action: () => this.createSource(key) }));
-      const scene = store().currentScene();
+      const scene = store().editScene();
       const existing = Object.values(store().data.sources).filter((s) => !s.global && !scene.items.some((it) => it.sourceId === s.id));
       if (existing.length) {
         entries.push({ separator: true });
@@ -192,7 +241,7 @@
       const name = await MS.prompt(`Ajouter : ${t.label}`, 'Nom de la source', store().uniqueName(t.label, Object.values(store().data.sources).map((s) => s.name)));
       if (!name) return;
       const src = store().createSource(type, name, t.defaults());
-      const scene = store().currentScene();
+      const scene = store().editScene();
       const item = store().addItem(scene.id, src.id);
       MS.preview.select(item.id);
       const ok = await MS.openProperties(src.id);
@@ -200,10 +249,11 @@
     },
 
     itemContextMenu(item, x, y) {
-      const sceneId = store().data.currentSceneId;
+      const sceneId = store().editScene().id;
       this.showMenu(
         [
           { label: 'Propriétés…', action: () => MS.openProperties(item.sourceId) },
+          { label: 'Filtres…', action: () => MS.openFilters(item.sourceId) },
           { label: 'Renommer…', action: () => this.renameSource(item.sourceId) },
           { separator: true },
           { label: "Ajuster à l'écran", action: () => MS.preview.transform(item, 'fit') },
@@ -364,6 +414,125 @@
       };
       setBtn('#btn-stream', 'stream', 'Arrêter le streaming', 'Démarrer le streaming');
       setBtn('#btn-record', 'record', "Arrêter l'enregistrement", "Démarrer l'enregistrement");
+      MS.$('#btn-studio').classList.toggle('on', store().settings.ui.studio);
+    },
+
+    /* Barre sous l'aperçu ----------------------------------------------- */
+    renderPreviewBar() {
+      const item = MS.preview.selectedItem();
+      const src = item && store().source(item.sourceId);
+      MS.$('#selected-label').textContent = src ? src.name : 'Aucune source sélectionnée';
+      for (const b of document.querySelectorAll('#preview-toolbar .btn')) b.disabled = !src;
+    },
+
+    /* Chat ----------------------------------------------------------------- */
+    chatLine(m) {
+      if (m.divider) return el('div', { class: 'chat-divider', text: m.message });
+      if (m.system) return el('div', { class: 'chat-line chat-system', text: `[${m.platform}] ${m.message}` });
+      const icon = MS.PLATFORM_ICONS[m.platform]
+        ? el('span', {
+            class: `chat-icon ${m.platform}`,
+            title: m.platform,
+            html: `<svg viewBox="0 0 24 24"><path d="${MS.PLATFORM_ICONS[m.platform]}"/></svg>`,
+          })
+        : null;
+      const badges = (m.badges || []).map((b) => {
+        const label = MS.BADGE_LABELS[b.type] || b.title || b.type;
+        const title = b.count ? `${label} (${b.count})` : label;
+        return b.imageUrl ? el('img', { class: 'chat-badge-img', src: b.imageUrl, alt: label, title }) : el('span', { class: `chat-badge b-${b.type}`, text: label, title });
+      });
+      return el(
+        'div',
+        { class: `chat-line ${m.mentioned ? 'mentioned' : ''}` },
+        icon,
+        badges,
+        el('span', { class: 'chat-user', text: m.username, style: m.color ? { color: m.color } : null }),
+        el('span', { class: 'chat-text', text: ` ${m.message}` })
+      );
+    },
+
+    appendChat(m) {
+      const list = this.chatList;
+      const atBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
+      list.querySelector('.empty')?.remove();
+      list.append(this.chatLine(m));
+      while (list.children.length > 200) list.firstChild.remove();
+      if (atBottom) list.scrollTop = list.scrollHeight;
+    },
+
+    renderChat() {
+      const msgs = MS.chat.messages;
+      this.chatList.replaceChildren(...(msgs.length ? msgs.map((m) => this.chatLine(m)) : [el('div', { class: 'empty', text: 'Aucun message pour le moment.' })]));
+      this.chatList.scrollTop = this.chatList.scrollHeight;
+    },
+
+    renderChatStatus() {
+      const mode = store().settings.chat.mode;
+      const box = MS.$('#chat-status');
+      if (mode === 'off') {
+        box.replaceChildren(el('button', { class: 'link', text: 'Configurer le chat…', onclick: () => MS.openSettings('chat') }));
+        return;
+      }
+      const labels = { connected: 'connecté', connecting: 'connexion…', error: 'erreur' };
+      const entries = Object.entries(MS.chat.status);
+      box.replaceChildren(
+        ...(entries.length ? entries : [[mode, { status: 'connecting' }]]).map(([p, st]) =>
+          el('span', { class: `chip ${st.status}`, title: st.error || '', text: `${p} : ${labels[st.status] || st.status}` })
+        )
+      );
+    },
+
+    /* Menus et docks ------------------------------------------------------- */
+    bindMenus() {
+      document.querySelectorAll('[data-menu]').forEach((b) => b.addEventListener('click', () => this.openMenu(b.dataset.menu, b)));
+    },
+
+    openMenu(name, anchor) {
+      const r = anchor.getBoundingClientRect();
+      const ui = store().settings.ui;
+      const check = (on, label) => `${on ? '✓' : '   '}  ${label}`;
+      const menus = {
+        file: [
+          { label: 'Afficher les enregistrements', action: () => MS.$('[data-act="folder"]').click() },
+          { label: 'Paramètres', action: () => MS.openSettings() },
+          { separator: true },
+          { label: 'Quitter', action: () => window.close() },
+        ],
+        view: [
+          { label: check(ui.studio, 'Mode studio'), action: () => store().setStudio(!ui.studio) },
+          { label: check(ui.docks.chat, 'Chat'), action: () => this.toggleDock('chat') },
+        ],
+        docks: Object.entries(DOCK_LABELS).map(([k, label]) => ({ label: check(ui.docks[k], label), action: () => this.toggleDock(k) })),
+        help: [
+          { label: 'Page du projet (GitHub)', action: () => window.api.openExternal('https://github.com/TheDEMON78/mystream') },
+          { label: 'Nouveautés (releases)', action: () => window.api.openExternal('https://github.com/TheDEMON78/mystream/releases') },
+          { separator: true },
+          { label: `MyStream v${MS.appInfo.version} — BloopStudio`, disabled: true },
+        ],
+      };
+      this.showMenu(menus[name], r.left, r.bottom + 2);
+    },
+
+    toggleDock(key) {
+      const docks = store().settings.ui.docks;
+      docks[key] = !docks[key];
+      store().save();
+      this.applyDocks();
+    },
+
+    applyDocks() {
+      const docks = store().settings.ui.docks;
+      const weights = { scenes: 1, sources: 1.3, mixer: 2, transitions: 0.9, controls: 1 };
+      const cols = [];
+      for (const [k, w] of Object.entries(weights)) {
+        const d = MS.$(`#dock-${k}`);
+        d.hidden = !docks[k];
+        if (docks[k]) cols.push(`${w}fr`);
+      }
+      MS.$('#docks').style.gridTemplateColumns = cols.join(' ');
+      MS.$('#docks').hidden = !cols.length;
+      MS.$('#dock-chat').hidden = !docks.chat;
+      MS.$('#app').classList.toggle('no-chat', !docks.chat);
     },
 
     statusLoop() {
@@ -371,7 +540,33 @@
       const rec = MS.$('#status-rec');
       const perf = MS.$('#status-perf');
       const fps = MS.$('#status-fps');
+      const rs = MS.$('#status-restream');
       let cpu = null;
+      const pollRestream = async () => {
+        const st = store().settings;
+        if (st.stream.service !== 'restream') {
+          rs.hidden = true;
+          return;
+        }
+        rs.hidden = false;
+        const r = await window.api.restreamStatus(st.restream);
+        if (!r.ok) {
+          rs.className = 'badge error';
+          rs.textContent = 'Restream injoignable';
+          rs.title = r.error;
+          return;
+        }
+        const names = { idle: 'inactif', connecting: 'connexion', live: 'en direct', error: 'erreur', stopped: 'arrêté' };
+        const dests = Object.entries(r.status.destinations).map(([k, d]) => `${k} ${names[d.status] || d.status}`);
+        rs.className = `badge ${Object.values(r.status.destinations).some((d) => d.status === 'live') ? 'on' : ''}`;
+        rs.textContent = `Restream · ${r.status.obsConnected ? 'flux reçu' : 'en attente du flux'}${dests.length ? ` · ${dests.join(' · ')}` : ''}`;
+        rs.title = Object.entries(r.status.destinations)
+          .filter(([, d]) => d.failureReason)
+          .map(([k, d]) => `${k} : ${d.failureReason}`)
+          .join('\n');
+      };
+      pollRestream();
+      setInterval(pollRestream, 4000);
       setInterval(async () => {
         try {
           cpu = await window.api.stats();
@@ -391,10 +586,12 @@
         perf.textContent = cpu ? `CPU ${cpu.cpu.toFixed(1)} % · ${Math.round(cpu.memMB)} Mo` : '';
         const s = MS.compositor.stats;
         const target = store().settings.video.fps;
-        fps.textContent = `${s.fps.toFixed(1)} / ${target} FPS · rendu ${s.renderMs.toFixed(1)} ms · images en retard ${s.lagged}`;
+        fps.textContent = `${s.fps.toFixed(1)} / ${target} FPS · rendu ${s.renderMs.toFixed(1)} ms · images manquées ${s.lagged}`;
       }, 500);
     },
   };
+
+  const DOCK_LABELS = { scenes: 'Scènes', sources: 'Sources', mixer: 'Mixeur audio', transitions: 'Transitions', controls: 'Commandes', chat: 'Chat' };
 
   function gainLabel(g) {
     return g <= 0 ? '-∞ dB' : `${(20 * Math.log10(g)).toFixed(1)} dB`;

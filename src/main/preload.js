@@ -2,6 +2,8 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
+const listen = (channel) => (fn) => ipcRenderer.on(channel, (_e, data) => fn(data));
+
 contextBridge.exposeInMainWorld('api', {
   loadConfig: () => ipcRenderer.invoke('config:load'),
   saveConfig: (data) => ipcRenderer.invoke('config:save', data),
@@ -10,12 +12,25 @@ contextBridge.exposeInMainWorld('api', {
   chooseDirectory: (defaultPath) => ipcRenderer.invoke('dialog:chooseDir', defaultPath),
   openPath: (p) => ipcRenderer.invoke('shell:openPath', p),
   showItemInFolder: (p) => ipcRenderer.invoke('shell:showItem', p),
+  openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
   appInfo: () => ipcRenderer.invoke('app:info'),
   stats: () => ipcRenderer.invoke('app:stats'),
+  encoders: () => ipcRenderer.invoke('encoders:list'),
   outputStart: (opts) => ipcRenderer.invoke('output:start', opts),
   outputChunk: (id, buffer) => ipcRenderer.send('output:chunk', id, new Uint8Array(buffer)),
   outputStop: (id) => ipcRenderer.invoke('output:stop', id),
-  onOutputEnded: (fn) => ipcRenderer.on('output:ended', (_e, data) => fn(data)),
-  onOutputProgress: (fn) => ipcRenderer.on('output:progress', (_e, data) => fn(data)),
+  onOutputEnded: listen('output:ended'),
+  onOutputProgress: listen('output:progress'),
+  restreamTest: (cfg) => ipcRenderer.invoke('restream:test', cfg),
+  restreamStatus: (cfg) => ipcRenderer.invoke('restream:status', cfg),
+  restreamChat: (enabled, cfg) => ipcRenderer.send('restream:chat', enabled, cfg),
+  kickChatroom: (channel) => ipcRenderer.invoke('kick:chatroom', channel),
+  onChatMessage: listen('chat:message'),
+  onChatStatus: listen('chat:status'),
+  browserCreate: (id, opts) => ipcRenderer.send('browser:create', id, opts),
+  browserDestroy: (id) => ipcRenderer.send('browser:destroy', id),
+  browserReload: (id) => ipcRenderer.send('browser:reload', id),
+  onBrowserFrame: listen('browser:frame'),
+  onBrowserError: listen('browser:error'),
   quit: () => ipcRenderer.send('app:quit'),
 });

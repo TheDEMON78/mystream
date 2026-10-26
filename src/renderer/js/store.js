@@ -4,6 +4,7 @@
   const MS = window.MS;
 
   const STREAM_SERVICES = {
+    restream: { label: 'Restream (BloopStudio)', server: '' },
     twitch: { label: 'Twitch', server: 'rtmp://live.twitch.tv/app' },
     youtube: { label: 'YouTube', server: 'rtmp://a.rtmp.youtube.com/live2' },
     kick: { label: 'Kick', server: 'rtmps://fa723fc1b171.global-contribute.live-video.net:443/app' },
@@ -17,14 +18,18 @@
       version: 1,
       settings: {
         video: { width: 1920, height: 1080, fps: 30 },
-        stream: { service: 'twitch', server: STREAM_SERVICES.twitch.server, key: '', videoBitrate: 4500, audioBitrate: 160, preset: 'veryfast' },
+        stream: { service: 'twitch', server: STREAM_SERVICES.twitch.server, key: '', videoBitrate: 4500, audioBitrate: 160, preset: 'veryfast', encoder: 'auto' },
         output: { recordPath: '', format: 'mp4', videoBitrate: 8000, audioBitrate: 192, preset: 'veryfast' },
         audio: { micDevice: 'default', desktopAudio: false },
         transition: { type: 'fade', duration: 300 },
+        restream: { url: 'http://localhost:3050', password: '', allowSelfSigned: true },
+        chat: { mode: 'off', twitchChannel: '', kickChannel: '', kickChatroomId: '' },
+        ui: { studio: false, docks: { scenes: true, sources: true, mixer: true, transitions: true, controls: true, chat: true } },
       },
       sources: {},
       scenes: [],
       currentSceneId: null,
+      previewSceneId: null,
     };
   }
 
@@ -51,6 +56,7 @@
       this.data = saved ? { ...d, ...saved, settings: deepMerge(d.settings, saved.settings) } : d;
       if (!this.data.scenes.length) this.addScene('Scène', true);
       if (!this.scene(this.data.currentSceneId)) this.data.currentSceneId = this.data.scenes[0].id;
+      if (!this.scene(this.data.previewSceneId)) this.data.previewSceneId = this.data.currentSceneId;
     },
 
     save: MS.debounce(() => {
@@ -68,6 +74,25 @@
 
     currentScene() {
       return this.scene(this.data.currentSceneId);
+    },
+
+    /** Scène en cours d'édition : l'aperçu en mode studio, sinon le programme. */
+    editScene() {
+      return (this.settings.ui.studio && this.scene(this.data.previewSceneId)) || this.currentScene();
+    },
+
+    setPreviewScene(id) {
+      if (!this.scene(id) || this.data.previewSceneId === id) return;
+      this.data.previewSceneId = id;
+      this.save();
+      MS.emit('preview:switched', id);
+    },
+
+    setStudio(on) {
+      this.settings.ui.studio = Boolean(on);
+      if (on) this.data.previewSceneId = this.data.currentSceneId;
+      this.save();
+      MS.emit('studio:changed', this.settings.ui.studio);
     },
 
     addScene(name, silent) {
@@ -95,6 +120,7 @@
       for (const item of [...scene.items]) this.removeItem(scene.id, item.id, true);
       this.data.scenes = this.data.scenes.filter((s) => s.id !== id);
       if (this.data.currentSceneId === id) this.setCurrentScene(this.data.scenes[0].id);
+      if (this.data.previewSceneId === id) this.setPreviewScene(this.data.currentSceneId);
       this.save();
       MS.emit('scenes:changed');
       MS.emit('sources:changed');

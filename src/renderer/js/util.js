@@ -58,6 +58,9 @@
   /* Bus d'événements --------------------------------------------------- */
   const listeners = {};
   MS.on = (evt, fn) => (listeners[evt] = listeners[evt] || []).push(fn);
+  MS.off = (evt, fn) => {
+    listeners[evt] = (listeners[evt] || []).filter((f) => f !== fn);
+  };
   MS.emit = (evt, ...args) => {
     for (const fn of listeners[evt] || []) {
       try {
@@ -83,6 +86,7 @@
     mute: 'M11 5L6 9H2v6h4l5 4V5zM23 9l-6 6M17 9l6 6',
     headphones: 'M3 18v-6a9 9 0 0 1 18 0v6M21 19a2 2 0 0 1-2 2h-1v-6h3zM3 19a2 2 0 0 0 2 2h1v-6H3z',
     folder: 'M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z',
+    chat: 'M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z',
     warning: 'M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0zM12 9v4M12 17h.01',
   };
 

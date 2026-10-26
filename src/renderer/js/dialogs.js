@@ -94,6 +94,10 @@
         root.append(el('p', { class: 'hint', text: f.text }));
         continue;
       }
+      if (f.type === 'button') {
+        root.append(el('div', { class: 'field' }, el('button', { class: 'btn', text: f.label, onclick: (e) => f.onClick(collect(), e.currentTarget) })));
+        continue;
+      }
       if (f.type === 'section') {
         root.append(el('div', { class: 'form-section', text: f.label }));
         continue;
@@ -186,7 +190,7 @@
           break;
         }
         default:
-          input = el('input', { class: 'input', type: 'text', value: v ?? '', oninput: changed });
+          input = el('input', { class: 'input', type: 'text', value: v ?? '', placeholder: f.placeholder || '', oninput: changed });
           getters[f.key] = () => input.value;
       }
       root.append(el('label', { class: `field ${f.type === 'capture' ? 'wide' : ''}` }, el('span', { text: f.label }), input));
@@ -256,7 +260,8 @@
       'div',
       {},
       src.global ? null : el('label', { class: 'field' }, el('span', { text: 'Nom' }), nameInput),
-      form.element
+      form.element,
+      (type.actions || []).map((a) => el('button', { class: 'btn', text: a.label, onclick: () => a.run(src) }))
     );
     const ok = await MS.modal({ title: `Propriétés de « ${src.name} »`, content, width: src.type === 'display_capture' ? 760 : 520 });
     if (ok) {
@@ -273,9 +278,69 @@
     return ok;
   };
 
+  /* Filtres d'une source -------------------------------------------------- */
+
+  MS.openFilters = async function (sourceId) {
+    const src = MS.store.source(sourceId);
+    if (!src) return;
+    const type = MS.SourceTypes[src.type] || {};
+    if (type.audioOnly) return MS.toast('Cette source est uniquement audio : pas de filtre vidéo.', 'info');
+    const backup = src.filters ? { ...src.filters } : null;
+    const values = { ...MS.filterDefaults(), ...(src.filters || {}) };
+    const num = (key, label, min, max) => ({ key, type: 'number', label, min, max });
+    const fields = [
+      { type: 'section', label: 'Correction des couleurs' },
+      { key: 'opacity', type: 'range', label: 'Opacité (%)', min: 0, max: 100 },
+      { key: 'brightness', type: 'range', label: 'Luminosité (%)', min: 0, max: 200 },
+      { key: 'contrast', type: 'range', label: 'Contraste (%)', min: 0, max: 200 },
+      { key: 'saturation', type: 'range', label: 'Saturation (%)', min: 0, max: 300 },
+      { key: 'hue', type: 'range', label: 'Teinte (°)', min: -180, max: 180 },
+      { type: 'section', label: 'Recadrage (pixels)' },
+      num('cropLeft', 'Gauche', 0, 8192),
+      num('cropTop', 'Haut', 0, 8192),
+      num('cropRight', 'Droite', 0, 8192),
+      num('cropBottom', 'Bas', 0, 8192),
+      { key: 'flipH', type: 'checkbox', label: 'Retourner horizontalement' },
+      { key: 'flipV', type: 'checkbox', label: 'Retourner verticalement' },
+      { type: 'section', label: 'Incrustation (fond vert)' },
+      { key: 'chroma', type: 'checkbox', label: 'Activer l’incrustation' },
+      { key: 'chromaColor', type: 'color', label: 'Couleur clé' },
+      { key: 'similarity', type: 'range', label: 'Similarité', min: 1, max: 1000 },
+      { key: 'smoothness', type: 'range', label: 'Lissage', min: 1, max: 1000 },
+    ];
+    const apply = (vals) => {
+      src.filters = { ...MS.filterDefaults(), ...vals };
+    };
+    const form = MS.buildForm(fields, values, apply);
+    const reset = el('button', {
+      class: 'btn',
+      text: 'Réinitialiser',
+      onclick: () => {
+        src.filters = null;
+        close(false);
+      },
+    });
+    let close = () => {};
+    const ok = await MS.modal({
+      title: `Filtres de « ${src.name} »`,
+      content: el('div', { class: 'filters-form' }, form.element, reset),
+      width: 560,
+      onOpen: (c) => (close = c),
+    });
+    if (ok) {
+      apply(form.values());
+      const isDefault = JSON.stringify(src.filters) === JSON.stringify(MS.filterDefaults());
+      if (isDefault) src.filters = null;
+    } else if (src.filters !== null || !backup) {
+      src.filters = backup;
+    }
+    MS.store.save();
+    MS.emit('items:changed');
+  };
+
   /* Paramètres ----------------------------------------------------------- */
 
-  MS.openSettings = async function () {
+  MS.openSettings = async function (initialTab = 'stream') {
     const st = MS.store.settings;
     const info = MS.appInfo;
     const outputsActive = MS.outputs.isAnyActive();
@@ -291,13 +356,57 @@
         label: 'Stream',
         fields: [
           { key: 'service', type: 'select', label: 'Service', options: services },
+          { type: 'info', text: 'Restream : MyStream récupère automatiquement l’adresse et la clé d’ingestion (onglet Restream). Serveur et clé ci-dessous sont alors ignorés.' },
           { key: 'server', type: 'text', label: 'Serveur' },
           { key: 'key', type: 'password', label: 'Clé de stream' },
+          { key: 'encoder', type: 'select', label: 'Encodeur vidéo', options: [{ value: 'auto', label: `Automatique (${(MS.encoders[0] || { label: 'x264' }).label})` }, ...MS.encoders.map((e) => ({ value: e.id, label: e.label }))] },
           { key: 'videoBitrate', type: 'number', label: 'Débit vidéo (kb/s)', min: 500, max: 50000, step: 100 },
           { key: 'audioBitrate', type: 'select', label: 'Débit audio (kb/s)', options: [96, 128, 160, 192, 256, 320].map((v) => ({ value: v, label: String(v) })) },
           { key: 'preset', type: 'select', label: 'Préréglage x264', options: presets },
         ],
         values: { ...st.stream },
+      },
+      restream: {
+        label: 'Restream',
+        fields: [
+          { type: 'info', text: 'Ton application Restream relaie le flux vers Twitch et Kick sans réencodage, et regroupe leur chat.' },
+          { key: 'url', type: 'text', label: 'Adresse de l’interface Restream', placeholder: 'http://localhost:3050' },
+          { key: 'password', type: 'password', label: 'Mot de passe (WEB_PASSWORD, si défini)' },
+          { key: 'allowSelfSigned', type: 'checkbox', label: 'Accepter un certificat HTTPS auto-signé' },
+          {
+            type: 'button',
+            label: 'Tester la connexion',
+            onClick: async (vals, btn) => {
+              btn.disabled = true;
+              const r = await window.api.restreamTest(vals);
+              btn.disabled = false;
+              if (!r.ok) return MS.toast(`Restream : ${r.error}`, 'error', 8000);
+              const d = Object.entries(r.status.destinations).map(([k, v]) => `${k} : ${v.status}`).join(', ');
+              MS.toast(`Restream OK\nIngestion : ${r.ingest}\n${d || 'aucune destination'}`, 'success', 8000);
+            },
+          },
+        ],
+        values: { ...st.restream },
+      },
+      chat: {
+        label: 'Chat',
+        fields: [
+          {
+            key: 'mode',
+            type: 'select',
+            label: 'Source du chat',
+            options: [
+              { value: 'off', label: 'Désactivé' },
+              { value: 'restream', label: 'Restream (Twitch + Kick, avec badges)' },
+              { value: 'direct', label: 'Direct (lecture publique, sans compte)' },
+            ],
+          },
+          { type: 'section', label: 'Mode direct' },
+          { key: 'twitchChannel', type: 'text', label: 'Chaîne Twitch', placeholder: 'ex. thedemon78' },
+          { key: 'kickChannel', type: 'text', label: 'Chaîne Kick', placeholder: 'ex. thedemon78' },
+          { key: 'kickChatroomId', type: 'text', label: 'ID du salon Kick (si la détection échoue)', placeholder: 'optionnel' },
+        ],
+        values: { ...st.chat },
       },
       output: {
         label: 'Enregistrement',
@@ -361,13 +470,15 @@
         if (input && server) input.value = server;
       }
     }
-    show('stream');
+    show(tabs[initialTab] ? initialTab : 'stream');
 
     const ok = await MS.modal({ title: 'Paramètres', content: el('div', { class: 'settings' }, nav, body), width: 720 });
     if (!ok) return;
 
     Object.assign(st.stream, forms.stream.values(), { audioBitrate: Number(forms.stream.values().audioBitrate) });
     Object.assign(st.output, forms.output.values(), { audioBitrate: Number(forms.output.values().audioBitrate) });
+    Object.assign(st.restream, forms.restream.values());
+    Object.assign(st.chat, forms.chat.values());
     const a = forms.audio.values();
     Object.assign(st.audio, a);
     const v = forms.video.values();

@@ -12,16 +12,23 @@
     selectedId: null,
     drag: null,
 
-    init(area, wrap, program, overlay) {
+    init(area, overlay) {
       this.area = area;
-      this.wrap = wrap;
-      this.program = program;
+      this.programWrap = MS.$('#preview-wrap');
+      this.studioWrap = MS.$('#studio-wrap');
+      this.studioCanvas = MS.$('#studio-canvas');
       this.overlay = overlay;
       this.octx = overlay.getContext('2d');
+      this.applyStudio();
 
       new ResizeObserver(() => this.layout()).observe(area);
       MS.on('video:resized', () => this.layout());
-      MS.on('scene:switched', () => this.select(null));
+      MS.on('scene:switched', () => !MS.store.settings.ui.studio && this.select(null));
+      MS.on('preview:switched', () => this.select(null));
+      MS.on('studio:changed', () => {
+        this.select(null);
+        this.applyStudio();
+      });
 
       overlay.addEventListener('pointerdown', (e) => this.onDown(e));
       overlay.addEventListener('pointermove', (e) => this.onMove(e));
@@ -36,18 +43,33 @@
       requestAnimationFrame(loop);
     },
 
+    /** En mode studio, l'édition se fait sur l'aperçu (à gauche) et non sur le programme. */
+    applyStudio() {
+      const studio = MS.store.settings.ui.studio;
+      this.area.classList.toggle('studio', studio);
+      this.wrap = studio ? this.studioWrap : this.programWrap;
+      this.wrap.append(this.overlay);
+      this.layout();
+    },
+
     layout() {
       const { width, height } = MS.store.settings.video;
-      const aw = this.area.clientWidth - 16;
-      const ah = this.area.clientHeight - 16;
+      const studio = MS.store.settings.ui.studio;
+      const aw = (studio ? (this.area.clientWidth - 140) / 2 : this.area.clientWidth) - 16;
+      const ah = this.area.clientHeight - (studio ? 40 : 16);
       const scale = Math.max(0.01, Math.min(aw / width, ah / height));
       const w = Math.floor(width * scale);
       const h = Math.floor(height * scale);
-      this.wrap.style.width = `${w}px`;
-      this.wrap.style.height = `${h}px`;
       const dpr = window.devicePixelRatio || 1;
+      for (const wrap of [this.programWrap, this.studioWrap]) {
+        wrap.style.width = `${w}px`;
+        wrap.style.height = `${h}px`;
+      }
       this.overlay.width = Math.round(w * dpr);
       this.overlay.height = Math.round(h * dpr);
+      this.studioCanvas.width = studio ? Math.round(w * dpr) : 1;
+      this.studioCanvas.height = studio ? Math.round(h * dpr) : 1;
+      this.lastOverlay = null;
     },
 
     /** Échelle scène -> pixels CSS de l'aperçu. */
@@ -68,7 +90,7 @@
     },
 
     selectedItem() {
-      const scene = MS.store.currentScene();
+      const scene = MS.store.editScene();
       return scene && this.selectedId ? scene.items.find((it) => it.id === this.selectedId) || null : null;
     },
 
@@ -92,7 +114,7 @@
     },
 
     hitItem(p) {
-      const scene = MS.store.currentScene();
+      const scene = MS.store.editScene();
       if (!scene) return null;
       for (const item of scene.items) {
         if (!item.visible) continue;
@@ -208,13 +230,16 @@
     },
 
     drawOverlay() {
+      const item = this.selectedItem();
+      const r = item && item.visible ? MS.compositor.itemRect(item) : null;
+      // On ne redessine que si la sélection a changé à l'écran.
+      const sig = r ? `${item.id}|${r.x}|${r.y}|${r.w}|${r.h}|${item.locked}` : '';
+      if (sig === this.lastOverlay) return;
+      this.lastOverlay = sig;
       const ctx = this.octx;
       const dpr = window.devicePixelRatio || 1;
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, this.overlay.width, this.overlay.height);
-      const item = this.selectedItem();
-      if (!item || !item.visible) return;
-      const r = MS.compositor.itemRect(item);
       if (!r) return;
       const s = this.scale * dpr;
       ctx.setTransform(s, 0, 0, s, 0, 0);

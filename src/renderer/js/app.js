@@ -8,13 +8,12 @@
 
   await MS.store.load();
   MS.audio.init();
-  MS.compositor.init(document.getElementById('program'));
-  MS.preview.init(
-    document.getElementById('preview-area'),
-    document.getElementById('preview-wrap'),
-    document.getElementById('program'),
-    document.getElementById('overlay')
-  );
+  // La détection des encodeurs matériels prend quelques secondes : en arrière-plan.
+  MS.encoders = [];
+  window.api.encoders().then((list) => (MS.encoders = list), () => {});
+  MS.compositor.init(document.getElementById('program'), document.getElementById('studio-canvas'));
+  MS.preview.init(document.getElementById('preview-area'), document.getElementById('overlay'));
+  MS.chat.init();
   MS.outputs.init();
   MS.syncGlobalAudio();
   MS.runtimes.sync();
