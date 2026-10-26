@@ -49,6 +49,15 @@ Les versions compilées sont publiées automatiquement dans les [Releases](https
 
 Pour incruster le chat dans le stream, ajoute une source **Chat du stream** à ta scène.
 
+### Restream sur un serveur (NAS, VPS…)
+
+- **Adresse** : mets l'adresse publique de l'interface, ex. `https://bloop.myds.me:3050`.
+- **Mot de passe** : celui de `WEB_PASSWORD` (indispensable si Restream est exposé sur internet).
+- **Certificat auto-signé** (`RESTREAM_TLS=self-signed`) : laisse cochée l'option *Accepter un certificat HTTPS auto-signé*.
+- **Port RTMP** : MyStream envoie le flux sur le **même hôte**, port RTMP de Restream (1935 par défaut). Ce port doit être ouvert/redirigé sur le routeur ou le pare-feu du serveur.
+- **Adresse RTMP différente** (reverse proxy, port public redirigé, autre nom d'hôte) : renseigne le champ *Adresse RTMP*, ex. `rtmp://bloop.myds.me:19350`. La clé d'ingestion reste récupérée automatiquement.
+- Le chat Twitch fonctionne partout ; le chat Kick nécessite que Restream soit joignable en HTTPS (voir le README de Restream).
+
 ## Développement
 
 Prérequis : Node.js 22+.

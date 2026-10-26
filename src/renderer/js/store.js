@@ -22,7 +22,7 @@
         output: { recordPath: '', format: 'mp4', videoBitrate: 8000, audioBitrate: 192, preset: 'veryfast' },
         audio: { micDevice: 'default', desktopAudio: false },
         transition: { type: 'fade', duration: 300 },
-        restream: { url: 'http://localhost:3050', password: '', allowSelfSigned: true },
+        restream: { url: 'http://localhost:3050', password: '', allowSelfSigned: true, rtmpUrl: '' },
         chat: { mode: 'off', twitchChannel: '', kickChannel: '', kickChatroomId: '' },
         ui: { studio: false, docks: { scenes: true, sources: true, mixer: true, transitions: true, controls: true, chat: true } },
       },

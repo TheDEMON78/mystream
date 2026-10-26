@@ -51,6 +51,14 @@ function request(cfg, path, timeout = 5000) {
 async function ingestUrl(cfg) {
   const conf = await request(cfg, '/api/config');
   if (!conf.ingestKey) throw new Error("Restream n'a pas fourni de clé d'ingestion.");
+  // Adresse RTMP imposée : utile quand Restream est derrière un reverse proxy
+  // ou quand le routeur redirige le RTMP vers un autre port public.
+  const override = String(cfg.rtmpUrl || '').trim().replace(/\/+$/, '');
+  if (override) {
+    if (!/^rtmps?:\/\//i.test(override)) throw new Error("L'adresse RTMP doit commencer par rtmp://");
+    const base = /\/live$/i.test(override) ? override : `${override}/live`;
+    return { url: `${base}/${conf.ingestKey}`, key: conf.ingestKey };
+  }
   // « localhost » peut se résoudre en IPv6 (::1) alors que le serveur RTMP
   // de Restream n'écoute qu'en IPv4 : FFmpeg resterait bloqué à la connexion.
   const host = baseUrl(cfg).hostname.replace(/^localhost$/i, '127.0.0.1');

@@ -374,6 +374,12 @@
           { key: 'password', type: 'password', label: 'Mot de passe (WEB_PASSWORD, si défini)' },
           { key: 'allowSelfSigned', type: 'checkbox', label: 'Accepter un certificat HTTPS auto-signé' },
           {
+            key: 'rtmpUrl',
+            type: 'text',
+            label: 'Adresse RTMP (seulement si différente de l’interface)',
+            placeholder: 'automatique : rtmp://<même hôte>:1935/live',
+          },
+          {
             type: 'button',
             label: 'Tester la connexion',
             onClick: async (vals, btn) => {
