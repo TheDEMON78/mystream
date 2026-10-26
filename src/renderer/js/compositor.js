@@ -112,6 +112,20 @@
     }
   }
 
+  /**
+   * Planification prioritaire : avec scheduler.postTask « user-blocking », la
+   * prochaine image passe avant les autres tâches de l'interface (chat, IPC…).
+   */
+  function schedule(fn, delay) {
+    if (globalThis.scheduler && globalThis.TaskController) {
+      const ctl = new TaskController({ priority: 'user-blocking' });
+      scheduler.postTask(fn, { delay, signal: ctl.signal }).catch(() => {});
+      return () => ctl.abort();
+    }
+    const t = setTimeout(fn, delay);
+    return () => clearTimeout(t);
+  }
+
   /* Compositeur ------------------------------------------------------------ */
   const compositor = {
     canvas: null,
@@ -146,7 +160,7 @@
      * 16,67 ms), ce qui produisait 62,5 images/s au lieu de 60.
      */
     start(fps) {
-      clearTimeout(this.timer);
+      if (this.cancel) this.cancel();
       this.fps = fps;
       this.interval = 1000 / fps;
       this.next = performance.now();
@@ -173,7 +187,7 @@
           this.window = { frames: 0, start: this.next + this.interval };
         }
         this.next += this.interval;
-        this.timer = setTimeout(tick, Math.max(0, this.next - performance.now()));
+        this.cancel = schedule(tick, Math.max(0, this.next - performance.now()));
       };
       tick();
     },

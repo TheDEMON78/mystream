@@ -82,7 +82,16 @@
   MS.buildForm = function (fields, values, onChange) {
     const root = el('div', { class: 'form' });
     const getters = {};
-    const changed = () => onChange && onChange(collect());
+    const conditional = [];
+    // Champs affichés selon les autres valeurs (ex. serveur masqué avec Restream).
+    const refresh = () => {
+      const vals = collect();
+      for (const [node, test] of conditional) node.hidden = !test(vals);
+    };
+    const changed = () => {
+      refresh();
+      if (onChange) onChange(collect());
+    };
     const collect = () => {
       const out = {};
       for (const [k, g] of Object.entries(getters)) out[k] = g();
@@ -90,17 +99,25 @@
     };
 
     for (const f of fields) {
+      const before = root.childElementCount;
+      appendField(f);
+      if (f.showIf && root.childElementCount > before) conditional.push([root.lastElementChild, f.showIf]);
+    }
+    refresh();
+    return { element: root, values: collect };
+
+    function appendField(f) {
       if (f.type === 'info') {
         root.append(el('p', { class: 'hint', text: f.text }));
-        continue;
+        return;
       }
       if (f.type === 'button') {
         root.append(el('div', { class: 'field' }, el('button', { class: 'btn', text: f.label, onclick: (e) => f.onClick(collect(), e.currentTarget) })));
-        continue;
+        return;
       }
       if (f.type === 'section') {
         root.append(el('div', { class: 'form-section', text: f.label }));
-        continue;
+        return;
       }
       let input;
       const v = values[f.key];
@@ -137,7 +154,7 @@
           const cb = el('input', { type: 'checkbox', checked: Boolean(v), onchange: changed });
           root.append(el('label', { class: 'field checkbox' }, cb, el('span', { text: f.label })));
           getters[f.key] = () => cb.checked;
-          continue;
+          return;
         }
         case 'select': {
           const opts = f.options || [];
@@ -195,7 +212,6 @@
       }
       root.append(el('label', { class: `field ${f.type === 'capture' ? 'wide' : ''}` }, el('span', { text: f.label }), input));
     }
-    return { element: root, values: collect };
   };
 
   /* Sélecteur d'écran / fenêtre ----------------------------------------- */
@@ -356,13 +372,23 @@
         label: 'Stream',
         fields: [
           { key: 'service', type: 'select', label: 'Service', options: services },
-          { type: 'info', text: 'Restream : MyStream récupère automatiquement l’adresse et la clé d’ingestion (onglet Restream). Serveur et clé ci-dessous sont alors ignorés.' },
-          { key: 'server', type: 'text', label: 'Serveur' },
-          { key: 'key', type: 'password', label: 'Clé de stream' },
+          {
+            type: 'info',
+            text: `Le flux part vers ton Restream (${st.restream.url || 'adresse à renseigner'}) qui le relaie à Twitch et Kick. Adresse RTMP et clé d’ingestion sont récupérées automatiquement : réglages dans l’onglet Restream.`,
+            showIf: (v) => v.service === 'restream',
+          },
+          { key: 'server', type: 'text', label: 'Serveur', showIf: (v) => v.service !== 'restream' },
+          { key: 'key', type: 'password', label: 'Clé de stream', showIf: (v) => v.service !== 'restream' },
           { key: 'encoder', type: 'select', label: 'Encodeur vidéo', options: [{ value: 'auto', label: `Automatique (${(MS.encoders[0] || { label: 'x264' }).label})` }, ...MS.encoders.map((e) => ({ value: e.id, label: e.label }))] },
           { key: 'videoBitrate', type: 'number', label: 'Débit vidéo (kb/s)', min: 500, max: 50000, step: 100 },
           { key: 'audioBitrate', type: 'select', label: 'Débit audio (kb/s)', options: [96, 128, 160, 192, 256, 320].map((v) => ({ value: v, label: String(v) })) },
-          { key: 'preset', type: 'select', label: 'Préréglage x264', options: presets },
+          {
+            key: 'preset',
+            type: 'select',
+            label: 'Préréglage x264',
+            options: presets,
+            showIf: (v) => v.encoder === 'x264' || (v.encoder === 'auto' && (MS.encoders[0] || { id: 'x264' }).id === 'x264'),
+          },
         ],
         values: { ...st.stream },
       },
@@ -404,13 +430,20 @@
             options: [
               { value: 'off', label: 'Désactivé' },
               { value: 'restream', label: 'Restream (Twitch + Kick, avec badges)' },
-              { value: 'direct', label: 'Direct (lecture publique, sans compte)' },
+              { value: 'direct', label: 'Direct (Twitch uniquement, sans compte)' },
             ],
           },
-          { type: 'section', label: 'Mode direct' },
-          { key: 'twitchChannel', type: 'text', label: 'Chaîne Twitch', placeholder: 'ex. thedemon78' },
-          { key: 'kickChannel', type: 'text', label: 'Chaîne Kick', placeholder: 'ex. thedemon78' },
-          { key: 'kickChatroomId', type: 'text', label: 'ID du salon Kick (si la détection échoue)', placeholder: 'optionnel' },
+          {
+            type: 'info',
+            text: 'Restream regroupe Twitch et Kick via leurs API officielles (badges et emotes inclus). Pour Kick, Restream doit être joignable en HTTPS (voir son README).',
+            showIf: (v) => v.mode === 'restream',
+          },
+          { key: 'twitchChannel', type: 'text', label: 'Chaîne Twitch', placeholder: 'ex. m8_thedemon', showIf: (v) => v.mode === 'direct' },
+          {
+            type: 'info',
+            text: 'Le mode direct lit uniquement le chat Twitch. Kick n’offre pas de lecture publique fiable : utilise le mode Restream pour l’avoir.',
+            showIf: (v) => v.mode === 'direct',
+          },
         ],
         values: { ...st.chat },
       },

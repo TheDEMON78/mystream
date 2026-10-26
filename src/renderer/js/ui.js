@@ -54,6 +54,7 @@
       this.renderChatStatus();
       this.meterLoop();
       this.statusLoop();
+      this.initUpdates();
     },
 
     bindToolbar() {
@@ -370,16 +371,16 @@
       );
     },
 
+    /** VU-mètres à 30 Hz (largement suffisant à l'œil), seulement si le dock est visible. */
     meterLoop() {
-      const tick = () => {
+      setInterval(() => {
+        if (MS.$('#dock-mixer').hidden) return;
         for (const ch of this.mixer.querySelectorAll('.channel')) {
           const db = MS.audio.level(ch.dataset.id);
           const level = Number.isFinite(db) ? MS.clamp((db + 60) / 60, 0, 1) : 0;
-          ch.querySelector('.meter-cover').style.width = `${(1 - level) * 100}%`;
+          ch.querySelector('.meter-cover').style.transform = `scaleX(${1 - level})`;
         }
-        requestAnimationFrame(tick);
-      };
-      requestAnimationFrame(tick);
+      }, 33);
     },
 
     /* Transitions ------------------------------------------------------ */
@@ -439,15 +440,27 @@
       const badges = (m.badges || []).map((b) => {
         const label = MS.BADGE_LABELS[b.type] || b.title || b.type;
         const title = b.count ? `${label} (${b.count})` : label;
-        return b.imageUrl ? el('img', { class: 'chat-badge-img', src: b.imageUrl, alt: label, title }) : el('span', { class: `chat-badge b-${b.type}`, text: label, title });
+        if (b.imageUrl) return el('img', { class: 'chat-badge-img', src: b.imageUrl, alt: label, title });
+        const ic = MS.BADGE_ICONS[b.type];
+        if (ic) {
+          return el('span', {
+            class: 'chat-badge-img',
+            title,
+            html: `<svg viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="${ic.bg}"/><path d="${ic.d}" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></svg>`,
+          });
+        }
+        return el('span', { class: 'chat-badge', text: label, title });
       });
+      const parts = (m.parts || [{ type: 'text', text: m.message }]).map((p) =>
+        p.type === 'emote' ? el('img', { class: 'chat-emote', src: p.url, alt: p.name, title: p.name }) : document.createTextNode(p.text)
+      );
       return el(
         'div',
         { class: `chat-line ${m.mentioned ? 'mentioned' : ''}` },
         icon,
         badges,
         el('span', { class: 'chat-user', text: m.username, style: m.color ? { color: m.color } : null }),
-        el('span', { class: 'chat-text', text: ` ${m.message}` })
+        el('span', { class: 'chat-text' }, ' ', parts)
       );
     },
 
@@ -475,11 +488,12 @@
       }
       const labels = { connected: 'connecté', connecting: 'connexion…', error: 'erreur' };
       const entries = Object.entries(MS.chat.status);
-      box.replaceChildren(
-        ...(entries.length ? entries : [[mode, { status: 'connecting' }]]).map(([p, st]) =>
-          el('span', { class: `chip ${st.status}`, title: st.error || '', text: `${p} : ${labels[st.status] || st.status}` })
-        )
+      const chips = (entries.length ? entries : [[mode, { status: 'connecting' }]]).map(([p, st]) =>
+        el('span', { class: `chip ${st.status}`, title: st.error || '', text: `${p} : ${labels[st.status] || st.status}` })
       );
+      const errors = entries.filter(([, st]) => st.status === 'error' && st.error).map(([p, st]) => el('div', { class: 'chat-error', text: `${p} : ${st.error}` }));
+      const hint = mode === 'direct' ? el('div', { class: 'chat-hint', text: 'Kick : passe par Restream (API officielle de Kick).' }) : null;
+      box.replaceChildren(...chips, ...errors, hint || '');
     },
 
     /* Menus et docks ------------------------------------------------------- */
@@ -504,6 +518,8 @@
         ],
         docks: Object.entries(DOCK_LABELS).map(([k, label]) => ({ label: check(ui.docks[k], label), action: () => this.toggleDock(k) })),
         help: [
+          { label: 'Rechercher des mises à jour', action: () => this.checkUpdates() },
+          { separator: true },
           { label: 'Page du projet (GitHub)', action: () => window.api.openExternal('https://github.com/TheDEMON78/mystream') },
           { label: 'Nouveautés (releases)', action: () => window.api.openExternal('https://github.com/TheDEMON78/mystream/releases') },
           { separator: true },
@@ -533,6 +549,37 @@
       MS.$('#docks').hidden = !cols.length;
       MS.$('#dock-chat').hidden = !docks.chat;
       MS.$('#app').classList.toggle('no-chat', !docks.chat);
+    },
+
+    /* Mises à jour ---------------------------------------------------------- */
+    initUpdates() {
+      const badge = MS.$('#update-badge');
+      badge.addEventListener('click', () => window.api.updateInstall());
+      const show = (st) => {
+        const texts = {
+          downloading: `Mise à jour v${st.version} : téléchargement ${st.percent || 0} %`,
+          ready: `Redémarrer pour installer la v${st.version}`,
+          available: `Nouvelle version v${st.version} : télécharger`,
+        };
+        badge.hidden = !texts[st.status];
+        badge.textContent = texts[st.status] || '';
+        badge.disabled = st.status === 'downloading';
+        if (st.status === 'ready' && this.lastUpdate !== 'ready') MS.toast(`La v${st.version} est prête : elle s'installera à la fermeture de MyStream.`, 'success', 8000);
+        if (this.manualCheck && ['latest', 'error', 'available', 'downloading'].includes(st.status)) {
+          this.manualCheck = false;
+          if (st.status === 'latest') MS.toast('MyStream est à jour.', 'success');
+          else if (st.status === 'error') MS.toast(`Mise à jour impossible : ${st.error}`, 'error', 8000);
+        }
+        this.lastUpdate = st.status;
+      };
+      window.api.onUpdateState(show);
+      window.api.updateState().then(show);
+    },
+
+    checkUpdates() {
+      this.manualCheck = true;
+      MS.toast('Recherche de mises à jour…', 'info', 2500);
+      window.api.updateCheck();
     },
 
     statusLoop() {

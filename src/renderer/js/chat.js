@@ -27,6 +27,68 @@
     og: 'OG',
   };
 
+  // Logos intégrés des badges (Kick ne fournit aucune image de badge) :
+  // fond coloré + pictogramme blanc dessiné au trait, sur une grille 24×24.
+  MS.BADGE_ICONS = {
+    broadcaster: { bg: '#e91916', d: 'M4 7h10v10H4zM14 10.5l5-3v9l-5-3z' },
+    moderator: { bg: '#00ad03', d: 'M15 4h5v5L10 19l-5-5zM4 20l3-3' },
+    vip: { bg: '#e005b9', d: 'M7 5h10l4 5-9 10L3 10zM3 10h18' },
+    subscriber: { bg: '#8205b4', d: 'M12 4l2.4 5 5.6.6-4.2 3.8 1.2 5.6-5-2.9-5 2.9 1.2-5.6L4 9.6 9.6 9z' },
+    founder: { bg: '#3d89d8', d: 'M4 17h16M5 17l-1-9 5 4 3-6 3 6 5-4-1 9' },
+    og: { bg: '#0e9e7a', d: 'M8.5 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM20 9h-3a2 2 0 0 0-2 2v2a2 2 0 0 0 2 2h3v-3h-2' },
+    verified: { bg: '#1fd655', d: 'M5 12.5l4.5 4.5L19 7.5' },
+    sub_gifter: { bg: '#ff8c00', d: 'M4 10h16v3H4zM6 13h12v7H6zM12 10v10M12 10c-2-5-6-4-4-.5M12 10c2-5 6-4 4-.5' },
+    staff: { bg: '#3a3a3a', d: 'M14 6a4 4 0 0 0 5 5l-8 8-3-3 8-8a4 4 0 0 1-2-2z' },
+    partner: { bg: '#9146ff', d: 'M5 12.5l4.5 4.5L19 7.5' },
+    bits: { bg: '#8a3dff', d: 'M12 3l7 9-7 9-7-9z' },
+    premium: { bg: '#00a3ff', d: 'M4 8l4 4 4-7 4 7 4-4-2 10H6z' },
+  };
+
+  /** Découpe le texte d'un message en morceaux de texte et d'emotes. */
+  function parseParts(m) {
+    const text = String(m.message || '');
+    const parts = [];
+    if (m.emotes && m.emotes.length) {
+      // Positions Twitch exprimées en caractères Unicode (pas en UTF-16).
+      const chars = Array.from(text);
+      let pos = 0;
+      for (const e of [...m.emotes].sort((a, b) => a.start - b.start)) {
+        if (e.start > pos) parts.push({ type: 'text', text: chars.slice(pos, e.start).join('') });
+        parts.push({ type: 'emote', name: chars.slice(e.start, e.end + 1).join(''), url: `https://static-cdn.jtvnw.net/emoticons/v2/${e.id}/default/dark/2.0` });
+        pos = e.end + 1;
+      }
+      if (pos < chars.length) parts.push({ type: 'text', text: chars.slice(pos).join('') });
+      return parts;
+    }
+    // Emotes Kick : [emote:ID:nom]
+    const re = /\[emote:(\d+):([^\]]*)\]/g;
+    let last = 0;
+    let match;
+    while ((match = re.exec(text))) {
+      if (match.index > last) parts.push({ type: 'text', text: text.slice(last, match.index) });
+      parts.push({ type: 'emote', name: match[2], url: `https://files.kick.com/emotes/${match[1]}/fullsize` });
+      last = re.lastIndex;
+    }
+    if (last < text.length) parts.push({ type: 'text', text: text.slice(last) });
+    return parts;
+  }
+
+  /** Cache d'images (badges, emotes) chargées en CORS pour pouvoir les dessiner dans le flux. */
+  const images = new Map();
+  MS.chatImage = function (url) {
+    let img = images.get(url);
+    if (!img) {
+      img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => MS.emit('chat:image');
+      img.onerror = () => (img.failed = true);
+      img.src = url;
+      images.set(url, img);
+      if (images.size > 500) images.delete(images.keys().next().value);
+    }
+    return img.complete && img.naturalWidth && !img.failed ? img : null;
+  };
+
   /* Twitch : lecture anonyme du chat IRC (aucun compte nécessaire) ------- */
   class TwitchIrc {
     constructor(channel, onMessage, onStatus) {
@@ -82,83 +144,22 @@
           .filter(Boolean)
           .map((b) => {
             const [type, v] = b.split('/');
-            return { type, count: type === 'subscriber' || type === 'bits' ? Number(v) || undefined : undefined };
+            return { type, version: v, count: type === 'subscriber' || type === 'bits' ? Number(v) || undefined : undefined };
           });
+        const emotes = [];
+        for (const group of (tags.emotes || '').split('/').filter(Boolean)) {
+          const [id, ranges] = group.split(':');
+          for (const r of (ranges || '').split(',')) {
+            const [start, end] = r.split('-').map(Number);
+            if (Number.isFinite(start) && Number.isFinite(end)) emotes.push({ id, start, end });
+          }
+        }
+        // Un /me (ACTION) décale le texte : les positions d'emotes ne s'appliquent plus.
         const name = (tags['display-name'] || '').replace(/\\s/g, ' ') || m[1];
-        this.onMessage({ platform: 'twitch', username: name, color: tags.color || null, message: text, badges });
+        this.onMessage({ platform: 'twitch', username: name, color: tags.color || null, message: text, badges, emotes: action ? [] : emotes });
       } else if (/ ROOMSTATE #/.test(rest) || / JOIN #/.test(rest)) {
         this.onStatus('connected');
       }
-    }
-
-    stop() {
-      this.stopped = true;
-      clearTimeout(this.timer);
-      if (this.ws) this.ws.close();
-    }
-  }
-
-  /* Kick : lecture du chat public via Pusher ------------------------------ */
-  class KickPusher {
-    constructor(cfg, onMessage, onStatus) {
-      this.cfg = cfg;
-      this.onMessage = onMessage;
-      this.onStatus = onStatus;
-      this.stopped = false;
-      this.start();
-    }
-
-    async start() {
-      let id = String(this.cfg.kickChatroomId || '').trim();
-      if (!id) {
-        this.onStatus('connecting');
-        try {
-          id = await window.api.kickChatroom(this.cfg.kickChannel);
-        } catch (e) {
-          this.onStatus('error', String(e.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''));
-          return;
-        }
-      }
-      if (this.stopped) return;
-      this.chatroom = id;
-      this.connect();
-    }
-
-    connect() {
-      const ws = new WebSocket('wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679?protocol=7&client=js&version=8.4.0&flash=false');
-      this.ws = ws;
-      this.onStatus('connecting');
-      ws.onmessage = (e) => {
-        let msg;
-        try {
-          msg = JSON.parse(e.data);
-        } catch {
-          return;
-        }
-        if (msg.event === 'pusher:connection_established') {
-          ws.send(JSON.stringify({ event: 'pusher:subscribe', data: { auth: '', channel: `chatrooms.${this.chatroom}.v2` } }));
-        } else if (msg.event === 'pusher_internal:subscription_succeeded') {
-          this.onStatus('connected');
-        } else if (msg.event === 'pusher:ping') {
-          ws.send(JSON.stringify({ event: 'pusher:pong', data: {} }));
-        } else if (msg.event === 'App\\Events\\ChatMessageEvent') {
-          const d = typeof msg.data === 'string' ? JSON.parse(msg.data) : msg.data;
-          const sender = d.sender || {};
-          const identity = sender.identity || {};
-          this.onMessage({
-            platform: 'kick',
-            username: sender.username || 'inconnu',
-            color: identity.color || null,
-            message: String(d.content || '').replace(/\[emote:\d+:([^\]]+)\]/g, '$1'),
-            badges: (identity.badges || []).map((b) => ({ type: (b.type || '').replace(/-/g, '_'), count: b.count })),
-          });
-        }
-      };
-      ws.onclose = () => {
-        if (this.stopped) return;
-        this.onStatus('error', 'déconnecté, nouvelle tentative…');
-        this.timer = setTimeout(() => this.connect(), 3000);
-      };
     }
 
     stop() {
@@ -195,13 +196,14 @@
       this.providers = [];
       this.status = {};
       window.api.restreamChat(c.mode === 'restream', st.restream);
-      if (c.mode === 'direct') {
-        if (c.twitchChannel.trim()) {
-          this.providers.push(new TwitchIrc(c.twitchChannel, (m) => this.push(m), (s, e) => this.setStatus('twitch', s, e)));
-        }
-        if (c.kickChannel.trim() || String(c.kickChatroomId).trim()) {
-          this.providers.push(new KickPusher(c, (m) => this.push(m), (s, e) => this.setStatus('kick', s, e)));
-        }
+      this.badgeMap = null;
+      if (c.mode === 'direct' && c.twitchChannel.trim()) {
+        this.providers.push(new TwitchIrc(c.twitchChannel, (m) => this.push(m), (s, e) => this.setStatus('twitch', s, e)));
+        window.api.twitchBadges(c.twitchChannel).then((map) => {
+          this.badgeMap = map;
+          this.messages.forEach((m) => this.resolveBadges(m));
+          MS.emit('chat:cleared'); // ré-affiche les messages déjà reçus avec leurs badges
+        });
       }
       MS.emit('chat:status');
     },
@@ -224,9 +226,21 @@
       }
       if (!m.system && !m.divider && m.timestamp) this.lastTs = Math.max(this.lastTs, m.timestamp);
       m.at = m.historical ? 0 : Date.now();
+      if (!m.system && !m.divider) m.parts = parseParts(m);
+      this.resolveBadges(m);
       this.messages.push(m);
       if (this.messages.length > MAX_MESSAGES) this.messages.shift();
       MS.emit('chat:message', m);
+    },
+
+    /** Images des badges Twitch en lecture directe (Restream fournit déjà les siennes). */
+    resolveBadges(m) {
+      if (m.platform !== 'twitch' || !this.badgeMap) return;
+      for (const b of m.badges || []) {
+        if (b.imageUrl) continue;
+        const found = this.badgeMap[`${b.type}/${b.version}`] || this.badgeMap[`${b.type}/1`] || this.badgeMap[`${b.type}/0`];
+        if (found) Object.assign(b, { imageUrl: found.url, title: found.title });
+      }
     },
 
     clear() {

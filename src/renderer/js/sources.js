@@ -124,8 +124,10 @@
           mandatory: {
             chromeMediaSource: 'desktop',
             chromeMediaSourceId: target.id,
-            maxWidth: Math.max(width, 3840),
-            maxHeight: Math.max(height, 2160),
+            // L'écran est réduit dès la capture à la taille du canevas : bien
+            // moins de données à copier et à redimensionner à chaque image.
+            maxWidth: width,
+            maxHeight: height,
             maxFrameRate: fps,
           },
         },
@@ -299,9 +301,15 @@
   class ChatRuntime extends CanvasRuntime {
     async start() {
       await super.start();
-      this.onMessage = () => this.update();
-      MS.on('chat:message', this.onMessage);
-      MS.on('chat:cleared', this.onMessage);
+      // Plusieurs messages arrivés ensemble = un seul redessin.
+      this.onMessage = () => {
+        if (this.pending) return;
+        this.pending = setTimeout(() => {
+          this.pending = null;
+          this.update();
+        }, 50);
+      };
+      for (const evt of ['chat:message', 'chat:cleared', 'chat:image']) MS.on(evt, this.onMessage);
       this.timer = setInterval(() => this.src.settings.lifetime > 0 && this.update(), 250);
     }
 
@@ -321,7 +329,7 @@
         ctx.fillRect(0, 0, W, H);
       }
       const size = Math.max(8, Number(s.fontSize) || 22);
-      const lineH = Math.round(size * 1.35);
+      const lineH = Math.round(size * 1.4);
       const pad = Math.round(size * 0.5);
       const font = (bold) => `${bold ? '700' : '400'} ${size}px "${s.font}", sans-serif`;
       const now = Date.now();
@@ -350,7 +358,7 @@
       ctx.globalAlpha = 1;
     }
 
-    /** Découpe un message en lignes de segments (icône, badges, pseudo, mots). */
+    /** Découpe un message en lignes de segments (logo, badges, pseudo, mots, emotes). */
     layout(ctx, m, maxW, size, font) {
       const s = this.src.settings;
       const tokens = [];
@@ -360,15 +368,27 @@
         if (s.showIcons && MS.PLATFORM_ICONS[m.platform]) tokens.push({ kind: 'icon', platform: m.platform, w: size });
         if (s.showBadges) {
           for (const b of m.badges || []) {
-            const label = MS.BADGE_LABELS[b.type] || b.title || b.type;
-            ctx.font = `700 ${Math.round(size * 0.6)}px sans-serif`;
-            tokens.push({ kind: 'badge', text: label, w: ctx.measureText(label).width + size * 0.5 });
+            if (b.imageUrl) tokens.push({ kind: 'img', url: b.imageUrl, w: size });
+            else if (MS.BADGE_ICONS[b.type]) tokens.push({ kind: 'badgeicon', type: b.type, w: size });
+            else {
+              const label = MS.BADGE_LABELS[b.type] || b.title || b.type;
+              ctx.font = `700 ${Math.round(size * 0.6)}px sans-serif`;
+              tokens.push({ kind: 'badge', text: label, w: ctx.measureText(label).width + size * 0.5 });
+            }
           }
         }
         tokens.push({ kind: 'text', text: m.username, color: m.color || s.nameColor, bold: true });
         tokens.push({ kind: 'text', text: ':', color: s.textColor, bold: false });
       }
-      for (const word of String(m.message || '').split(/\s+/).filter(Boolean)) tokens.push({ kind: 'text', text: word, color: s.textColor, bold: false });
+      for (const p of m.parts || [{ type: 'text', text: m.message }]) {
+        if (p.type === 'emote') {
+          const img = MS.chatImage(p.url);
+          const h = size * 1.3;
+          tokens.push({ kind: 'img', url: p.url, w: img ? (img.naturalWidth / img.naturalHeight) * h : h, h });
+        } else {
+          for (const word of String(p.text || '').split(/\s+/).filter(Boolean)) tokens.push({ kind: 'text', text: word, color: s.textColor, bold: false });
+        }
+      }
 
       const gap = size * 0.3;
       const rows = [[]];
@@ -401,6 +421,25 @@
         ctx.fillStyle = MS.PLATFORM_COLORS[t.platform];
         ctx.fill(new Path2D(MS.PLATFORM_ICONS[t.platform]));
         ctx.restore();
+      } else if (t.kind === 'img') {
+        const img = MS.chatImage(t.url);
+        const h = t.h || size;
+        if (img) ctx.drawImage(img, x, cy - h / 2, t.w, h);
+      } else if (t.kind === 'badgeicon') {
+        const ic = MS.BADGE_ICONS[t.type];
+        ctx.save();
+        ctx.translate(x, cy - size / 2);
+        ctx.scale(size / 24, size / 24);
+        ctx.fillStyle = ic.bg;
+        ctx.beginPath();
+        ctx.roundRect(0, 0, 24, 24, 5);
+        ctx.fill();
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 2;
+        ctx.lineJoin = 'round';
+        ctx.lineCap = 'round';
+        ctx.stroke(new Path2D(ic.d));
+        ctx.restore();
       } else if (t.kind === 'badge') {
         const h = size * 0.85;
         ctx.fillStyle = 'rgba(76, 125, 255, 0.85)';
@@ -414,22 +453,23 @@
       } else {
         ctx.font = font(t.bold);
         ctx.textBaseline = 'middle';
+        // Contour plutôt qu'ombre floue : aussi lisible, bien moins coûteux.
         if (this.src.settings.shadow) {
-          ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
-          ctx.shadowBlur = size * 0.2;
-          ctx.shadowOffsetY = 1;
+          ctx.lineWidth = Math.max(2, size * 0.16);
+          ctx.lineJoin = 'round';
+          ctx.strokeStyle = 'rgba(0, 0, 0, 0.85)';
+          ctx.strokeText(t.text, x, cy);
         }
         ctx.fillStyle = t.color;
         ctx.fillText(t.text, x, cy);
-        ctx.shadowColor = 'transparent';
       }
     }
 
     dispose() {
       super.dispose();
       clearInterval(this.timer);
-      MS.off('chat:message', this.onMessage);
-      MS.off('chat:cleared', this.onMessage);
+      clearTimeout(this.pending);
+      for (const evt of ['chat:message', 'chat:cleared', 'chat:image']) MS.off(evt, this.onMessage);
     }
   }
 
@@ -450,23 +490,14 @@
       this.signature = this.sig();
       window.api.browserCreate(this.src.id, { ...this.src.settings });
     }
-    onFrame({ width, height, data }) {
+    /** Reçoit uniquement la zone modifiée, déjà convertie en RGBA par le processus principal. */
+    onFrame({ width, height, x, y, w, h, data }) {
       if (this.disposed) return;
       if (this.canvas.width !== width || this.canvas.height !== height) {
         this.canvas.width = width;
         this.canvas.height = height;
-        this.image = null;
       }
-      if (!this.image) this.image = new ImageData(width, height);
-      // Chromium fournit du BGRA : conversion en RGBA, 32 bits à la fois.
-      const bytes = data.byteOffset % 4 ? new Uint8Array(data) : data;
-      const src = new Uint32Array(bytes.buffer, bytes.byteOffset, width * height);
-      const dst = new Uint32Array(this.image.data.buffer);
-      for (let i = 0; i < src.length; i++) {
-        const p = src[i];
-        dst[i] = (p & 0xff00ff00) | ((p & 0xff) << 16) | ((p >>> 16) & 0xff);
-      }
-      this.ctx.putImageData(this.image, 0, 0);
+      this.ctx.putImageData(new ImageData(new Uint8ClampedArray(data.buffer, data.byteOffset, w * h * 4), w, h), x, y);
       if (!this.ready) this.markReady();
     }
     get width() {
@@ -486,7 +517,12 @@
 
   window.api.onBrowserFrame((f) => {
     const rt = MS.runtimes.get(f.id);
-    if (rt && rt.onFrame) rt.onFrame(f);
+    try {
+      if (rt && rt.onFrame) rt.onFrame(f);
+    } finally {
+      // Toujours accuser réception : l'image suivante n'est envoyée qu'après.
+      window.api.browserAck(f.id);
+    }
   });
   window.api.onBrowserError((e) => {
     const rt = MS.runtimes.get(e.id);
@@ -671,7 +707,7 @@
         { key: 'showIcons', type: 'checkbox', label: 'Logo de la plateforme' },
         { key: 'showBadges', type: 'checkbox', label: 'Badges (modo, abonné…)' },
         { key: 'showSystem', type: 'checkbox', label: 'Messages système' },
-        { key: 'shadow', type: 'checkbox', label: 'Ombre du texte' },
+        { key: 'shadow', type: 'checkbox', label: 'Contour du texte' },
       ],
     },
     browser: {

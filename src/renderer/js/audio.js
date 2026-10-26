@@ -112,7 +112,7 @@
       }
       const db = peak > 0 ? 20 * Math.log10(peak) : -Infinity;
       // Retombée progressive de l'indicateur, comme une vraie VU-mètre.
-      ch.peak = db > ch.peak ? db : Math.max(db, ch.peak - 1.2);
+      ch.peak = db > ch.peak ? db : Math.max(db, ch.peak - 2.4);
       return ch.peak;
     },
 

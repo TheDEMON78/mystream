@@ -13,12 +13,13 @@ Composez vos scènes à partir de plusieurs sources (écran, webcam, images, vid
   - Capture d'entrée audio (micro) et audio du bureau (Windows)
   - Image, source média (vidéo/audio, lecture en boucle)
   - Texte (police, taille, couleur, contour, fond, alignement) et source de couleur
-  - **Chat du stream** incrusté à l'écran (logos Twitch/Kick, badges, disparition automatique des anciens messages)
+  - **Chat du stream** incrusté à l'écran (logos Twitch/Kick, badges en images, emotes, disparition automatique des anciens messages)
   - **Navigateur** : n'importe quelle page web (alertes StreamElements/Streamlabs, widgets…), fond transparent, CSS personnalisé
   - Réutilisation d'une source existante dans plusieurs scènes
 - **Aperçu interactif** : sélection, déplacement, redimensionnement à la souris (poignées, `Maj` pour déformer, `Alt` pour désactiver l'aimantation), flèches du clavier, `Suppr`, menu contextuel (ajuster/étirer/centrer à l'écran, taille d'origine, ordre, verrouillage).
 - **Filtres par source** : opacité, luminosité, contraste, saturation, teinte, recadrage, miroir et **incrustation fond vert** (calculée sur la carte graphique).
-- **Dock Chat** : chat Twitch + Kick en direct à côté de l'aperçu, via Restream ou en lecture directe (sans compte).
+- **Dock Chat** : chat Twitch + Kick en direct à côté de l'aperçu, avec badges et emotes. Via Restream (Twitch + Kick, API officielles) ou en lecture directe (Twitch uniquement, sans compte).
+- **Mises à jour automatiques** : MyStream vérifie les nouvelles releases au démarrage puis toutes les 4 h ; l'installateur Windows et l'AppImage Linux se mettent à jour tout seuls (installation à la fermeture). Les autres formats affichent un lien de téléchargement.
 - **Mixeur audio** : VU-mètres, faders, muet, écoute (monitoring) par source ; sources globales *Mic/Aux* et *Audio du bureau*.
 - **Streaming RTMP/RTMPS** : Twitch, YouTube, Kick, Facebook Live ou serveur personnalisé, débit affiché en direct.
 - **Encodeur matériel** détecté automatiquement (NVIDIA NVENC, Intel Quick Sync, AMD AMF, Apple VideoToolbox), sinon x264.
@@ -38,6 +39,8 @@ Les versions compilées sont publiées automatiquement dans les [Releases](https
 | Windows | `MyStream-x.y.z-win-setup.exe` (installateur) ou `-win-portable.exe` |
 | Linux | `.AppImage` ou `.deb` |
 | macOS | `.dmg` (non signé : clic droit → *Ouvrir* au premier lancement) |
+
+Les mises à jour automatiques téléchargent les releases GitHub sans authentification : elles ne fonctionnent que si le dépôt est **public**.
 
 ## Utiliser MyStream avec Restream
 

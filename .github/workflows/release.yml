@@ -60,6 +60,8 @@ jobs:
             dist/*.AppImage
             dist/*.deb
             dist/*.dmg
+            dist/*.blockmap
+            dist/latest*.yml
 
   release:
     needs: [version, build]

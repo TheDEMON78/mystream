@@ -8,9 +8,15 @@ const { spawn } = require('child_process');
 const restream = require('./restream');
 const browserSources = require('./browserSources');
 const encoders = require('./encoders');
+const updater = require('./updater');
 
 // Les sources média doivent pouvoir jouer du son sans interaction préalable.
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+// Le rendu doit continuer à pleine vitesse même fenêtre réduite ou cachée.
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.commandLine.appendSwitch('disable-background-timer-throttling');
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
 
 let win = null;
 
@@ -150,6 +156,9 @@ async function buildStreamOutput(out, opts) {
   out.encoder = enc;
   const args = [
     '-hide_banner', '-loglevel', 'error', '-nostats', '-progress', 'pipe:1',
+    // Décodage matériel du flux d'entrée quand l'encodage l'est aussi : le
+    // processeur n'a alors presque plus rien à faire.
+    ...(enc === 'x264' ? [] : ['-hwaccel', 'auto']),
     '-i', 'pipe:0',
     ...encoders.videoArgs(enc, { bitrate: Number(s.videoBitrate) || 4500, preset: s.preset, fps }),
     '-r', String(fps), '-fps_mode', 'cfr',
@@ -284,21 +293,38 @@ ipcMain.on('restream:chat', (_e, enabled, cfg) => {
   else restreamChat.stop();
 });
 
-// Kick protège son API par Cloudflare : on passe par la pile réseau de
-// Chromium (net.fetch), plus proche d'un vrai navigateur que Node.
-ipcMain.handle('kick:chatroom', async (_e, channel) => {
-  const slug = String(channel || '').trim().toLowerCase().replace(/^.*kick\.com\//, '').replace(/[^a-z0-9_-]/g, '');
-  if (!slug) throw new Error('Nom de chaîne Kick vide.');
-  const res = await net.fetch(`https://kick.com/api/v2/channels/${slug}`, { headers: { Accept: 'application/json' } });
-  if (!res.ok) throw new Error(`Kick a répondu ${res.status}. Renseigne l'ID du salon de chat manuellement.`);
-  const data = await res.json();
-  if (!data.chatroom || !data.chatroom.id) throw new Error('Salon de chat introuvable.');
-  return data.chatroom.id;
+// Images des badges Twitch (abonné, modo, VIP…) via l'API publique ivr.fi,
+// pour le chat en lecture directe (Restream fournit déjà les siennes).
+const badgeCache = new Map();
+ipcMain.handle('twitch:badges', async (_e, channel) => {
+  const login = String(channel || '').trim().toLowerCase().replace(/[^a-z0-9_]/g, '');
+  if (badgeCache.has(login)) return badgeCache.get(login);
+  const map = {};
+  const load = async (url) => {
+    const res = await net.fetch(url, { headers: { Accept: 'application/json' } });
+    if (!res.ok) return;
+    for (const set of await res.json()) {
+      for (const v of set.versions || []) map[`${set.set_id}/${v.id}`] = { url: v.image_url_2x || v.image_url_1x, title: v.title };
+    }
+  };
+  try {
+    await load('https://api.ivr.fi/v2/twitch/badges/global');
+    if (login) await load(`https://api.ivr.fi/v2/twitch/badges/channel?login=${login}`);
+  } catch {
+    /* sans réseau : les badges restent sous forme de texte */
+  }
+  badgeCache.set(login, map);
+  return map;
 });
 
 ipcMain.on('browser:create', (_e, id, opts) => browserSources.create(id, opts, send));
 ipcMain.on('browser:destroy', (_e, id) => browserSources.destroy(id));
 ipcMain.on('browser:reload', (_e, id) => browserSources.reload(id));
+ipcMain.on('browser:ack', (_e, id) => browserSources.ack(id));
+
+ipcMain.handle('update:check', () => updater.check());
+ipcMain.handle('update:state', () => updater.getState());
+ipcMain.on('update:install', () => updater.install());
 
 ipcMain.handle('app:info', () => ({
   version: app.getVersion(),
@@ -373,6 +399,7 @@ if (!app.requestSingleInstanceLock()) {
     }
 
     createWindow();
+    updater.init(send);
     if (FFMPEG) encoders.detect(FFMPEG);
     app.on('activate', () => {
       if (!win) createWindow();
