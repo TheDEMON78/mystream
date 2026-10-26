@@ -1,0 +1,75 @@
+{
+  "name": "mystream",
+  "productName": "MyStream",
+  "version": "1.0.0",
+  "description": "Logiciel libre de streaming et d'enregistrement vidéo inspiré d'OBS Studio",
+  "main": "src/main/main.js",
+  "homepage": "https://github.com/TheDEMON78/mystream",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TheDEMON78/mystream.git"
+  },
+  "author": {
+    "name": "TheDEMON78",
+    "email": "90475756+TheDEMON78@users.noreply.github.com"
+  },
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "check": "node scripts/check.js",
+    "dist": "electron-builder --publish never"
+  },
+  "dependencies": {
+    "ffmpeg-static": "^5.3.0"
+  },
+  "devDependencies": {
+    "electron": "^44.0.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "io.github.thedemon78.mystream",
+    "productName": "MyStream",
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "icon": "src/assets/icon.png",
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/ffmpeg-static/**"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "${productName}-${version}-win-setup.${ext}"
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-win-portable.${ext}"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "AudioVideo",
+      "maintainer": "TheDEMON78 <90475756+TheDEMON78@users.noreply.github.com>"
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.video",
+      "identity": null,
+      "extendInfo": {
+        "NSCameraUsageDescription": "MyStream utilise la caméra pour les sources de capture vidéo.",
+        "NSMicrophoneUsageDescription": "MyStream utilise le micro pour les sources audio."
+      }
+    }
+  }
+}

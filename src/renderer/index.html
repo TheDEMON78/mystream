@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: file:; media-src 'self' blob: file: mediastream:; font-src 'self' data:"
+    />
+    <title>MyStream</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header id="topbar">
+        <div class="brand"><span class="logo-dot"></span>MyStream <span id="app-version" class="version"></span></div>
+        <div class="scene-now">Scène : <strong id="scene-label"></strong></div>
+      </header>
+
+      <main id="preview-area">
+        <div id="preview-wrap">
+          <canvas id="program"></canvas>
+          <canvas id="overlay"></canvas>
+        </div>
+      </main>
+
+      <section id="docks">
+        <div class="dock" id="dock-scenes">
+          <div class="dock-title">Scènes</div>
+          <ul class="list" id="scene-list"></ul>
+          <div class="dock-toolbar">
+            <button class="tool" data-act="scene-add" title="Ajouter une scène">+</button>
+            <button class="tool" data-act="scene-remove" title="Supprimer la scène">−</button>
+            <button class="tool" data-act="scene-up" title="Monter">▲</button>
+            <button class="tool" data-act="scene-down" title="Descendre">▼</button>
+          </div>
+        </div>
+
+        <div class="dock" id="dock-sources">
+          <div class="dock-title">Sources</div>
+          <ul class="list" id="source-list"></ul>
+          <div class="dock-toolbar">
+            <button class="tool" data-act="source-add" title="Ajouter une source">+</button>
+            <button class="tool" data-act="source-remove" title="Supprimer la source">−</button>
+            <button class="tool" data-act="source-props" title="Propriétés">⚙</button>
+            <button class="tool" data-act="source-up" title="Monter">▲</button>
+            <button class="tool" data-act="source-down" title="Descendre">▼</button>
+          </div>
+        </div>
+
+        <div class="dock" id="dock-mixer">
+          <div class="dock-title">Mixeur audio</div>
+          <div id="mixer"></div>
+        </div>
+
+        <div class="dock" id="dock-transitions">
+          <div class="dock-title">Transitions</div>
+          <div class="dock-body">
+            <label class="field">
+              <span>Type</span>
+              <select id="transition-type" class="input">
+                <option value="fade">Fondu</option>
+                <option value="cut">Coupure</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Durée (ms)</span>
+              <input id="transition-duration" class="input" type="number" min="0" max="10000" step="50" />
+            </label>
+          </div>
+        </div>
+
+        <div class="dock" id="dock-controls">
+          <div class="dock-title">Commandes</div>
+          <div class="dock-body controls">
+            <button id="btn-stream" class="btn big" data-act="stream">Démarrer le streaming</button>
+            <button id="btn-record" class="btn big" data-act="record">Démarrer l'enregistrement</button>
+            <button class="btn big" data-act="folder">Dossier des enregistrements</button>
+            <button class="btn big" data-act="settings">Paramètres</button>
+            <button class="btn big" data-act="quit">Quitter</button>
+          </div>
+        </div>
+      </section>
+
+      <footer id="statusbar">
+        <span id="status-fps"></span>
+        <span class="spacer"></span>
+        <span id="status-perf"></span>
+        <span id="status-live" class="badge">LIVE 00:00:00</span>
+        <span id="status-rec" class="badge">REC 00:00:00</span>
+      </footer>
+    </div>
+
+    <div id="modal-root"></div>
+    <div id="ctx-menu" class="ctx-menu hidden"></div>
+    <div id="toasts"></div>
+
+    <script src="js/util.js"></script>
+    <script src="js/store.js"></script>
+    <script src="js/sources.js"></script>
+    <script src="js/audio.js"></script>
+    <script src="js/compositor.js"></script>
+    <script src="js/preview.js"></script>
+    <script src="js/outputs.js"></script>
+    <script src="js/dialogs.js"></script>
+    <script src="js/ui.js"></script>
+    <script src="js/app.js"></script>
+  </body>
+</html>
