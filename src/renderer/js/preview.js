@@ -196,7 +196,21 @@
     onKey(e) {
       const tag = document.activeElement && document.activeElement.tagName;
       if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag) || document.querySelector('.modal-backdrop')) return;
+      const ctrl = e.ctrlKey || e.metaKey;
+      const k = e.key.toLowerCase();
+      if (ctrl && k === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        return MS.history.undo();
+      }
+      if (ctrl && (k === 'y' || (k === 'z' && e.shiftKey))) {
+        e.preventDefault();
+        return MS.history.redo();
+      }
       const item = this.selectedItem();
+      if (ctrl && k === 'e' && item) {
+        e.preventDefault();
+        return MS.openTransform(item);
+      }
       if (!item) return;
       const step = e.shiftKey ? 10 : 1;
       const moves = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] };

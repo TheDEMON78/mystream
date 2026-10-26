@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain, desktopCapturer, dialog, shell, session, systemPreferences, Menu, net } = require('electron');
+const { app, BrowserWindow, ipcMain, desktopCapturer, dialog, shell, session, systemPreferences, Menu, net, globalShortcut, Tray, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -9,6 +9,7 @@ const restream = require('./restream');
 const browserSources = require('./browserSources');
 const encoders = require('./encoders');
 const updater = require('./updater');
+const logger = require('./logger');
 
 // Les sources média doivent pouvoir jouer du son sans interaction préalable.
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
@@ -97,7 +98,9 @@ function startFfmpeg(out, args, secret) {
       out.closed = true;
       out.exitCode = code;
       if (!out.stopping) {
-        send('output:ended', { id: out.id, code, error: lastLines(out.stderr) || `FFmpeg s'est arrêté (code ${code})` });
+        const error = lastLines(out.stderr) || `FFmpeg s'est arrêté (code ${code})`;
+        logger.error(`Sortie ${out.kind} interrompue :`, error);
+        send('output:ended', { id: out.id, code, error });
       }
       resolve(code);
     });
@@ -131,7 +134,9 @@ function buildRecordOutput(out, opts) {
   else args.push('-c:v', 'libx264', '-preset', o.preset, '-b:v', `${o.videoBitrate}k`, '-pix_fmt', 'yuv420p');
   if (format === 'mkv') args.push('-c:a', 'copy');
   else args.push('-c:a', 'aac', '-b:a', `${o.audioBitrate}k`);
-  if (format === 'mp4') args.push('-movflags', '+faststart');
+  // MP4 fragmenté : en cas de plantage ou de coupure de courant, le fichier
+  // reste lisible jusqu'à la dernière seconde (un MP4 classique serait perdu).
+  if (format === 'mp4') args.push('-movflags', '+frag_keyframe+empty_moov+default_base_moof', '-frag_duration', '2000000', '-flush_packets', '1');
   args.push('-y', file);
   startFfmpeg(out, args);
 }
@@ -175,9 +180,11 @@ ipcMain.handle('output:start', async (_e, opts) => {
     else if (opts.kind === 'stream') await buildStreamOutput(out, opts);
     else throw new Error(`Sortie inconnue : ${opts.kind}`);
   } catch (e) {
+    logger.error(`Échec du démarrage ${opts.kind} :`, e.message);
     return { ok: false, error: e.message };
   }
   outputs.set(out.id, out);
+  logger.info(`Démarrage ${opts.kind}`, out.file || '', out.encoder || '', opts.mime);
   return { ok: true, id: out.id, file: out.file || null, encoder: out.encoder || null };
 });
 
@@ -195,6 +202,7 @@ async function stopOutput(id) {
   if (!out) return { ok: false, error: 'Sortie introuvable' };
   out.stopping = true;
   outputs.delete(id);
+  logger.info(`Arrêt ${out.kind}`, out.file || '');
   if (out.ws) {
     await new Promise((resolve) => out.ws.end(resolve));
     return { ok: true, file: out.file };
@@ -222,14 +230,117 @@ ipcMain.handle('config:load', () => {
   }
 });
 
+const backupDir = () => path.join(app.getPath('userData'), 'backups');
+
+/** Une sauvegarde par jour des scènes et réglages, les 14 dernières sont gardées. */
+function dailyBackup(json) {
+  try {
+    const dir = backupDir();
+    const file = path.join(dir, `config-${new Date().toISOString().slice(0, 10)}.json`);
+    if (fs.existsSync(file)) return;
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(file, json);
+    const old = fs.readdirSync(dir).filter((f) => /^config-.*\.json$/.test(f)).sort();
+    for (const f of old.slice(0, Math.max(0, old.length - 14))) fs.unlinkSync(path.join(dir, f));
+  } catch (e) {
+    logger.warn('Sauvegarde quotidienne impossible :', e.message);
+  }
+}
+
 ipcMain.handle('config:save', (_e, data) => {
   const file = configFile();
   const tmp = `${file}.tmp`;
+  const json = JSON.stringify(data, null, 2);
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
+  fs.writeFileSync(tmp, json);
   fs.renameSync(tmp, file);
+  dailyBackup(json);
   return true;
 });
+
+ipcMain.handle('config:export', async (_e, data) => {
+  const res = await dialog.showSaveDialog(win, {
+    defaultPath: path.join(app.getPath('documents'), `MyStream scènes ${timestampName()}.json`),
+    filters: [{ name: 'Collection de scènes MyStream', extensions: ['json'] }],
+  });
+  if (res.canceled || !res.filePath) return null;
+  fs.writeFileSync(res.filePath, JSON.stringify(data, null, 2));
+  return res.filePath;
+});
+
+ipcMain.handle('config:import', async (_e, fromBackups) => {
+  const res = await dialog.showOpenDialog(win, {
+    defaultPath: fromBackups ? backupDir() : app.getPath('documents'),
+    properties: ['openFile'],
+    filters: [{ name: 'Collection de scènes MyStream', extensions: ['json'] }],
+  });
+  if (res.canceled || !res.filePaths[0]) return null;
+  return JSON.parse(fs.readFileSync(res.filePaths[0], 'utf8'));
+});
+
+ipcMain.handle('disk:free', (_e, dir) => {
+  try {
+    const target = dir || app.getPath('videos');
+    fs.mkdirSync(target, { recursive: true });
+    const st = fs.statfsSync(target);
+    return st.bavail * st.bsize;
+  } catch {
+    return null;
+  }
+});
+
+ipcMain.handle('logs:open', () => shell.openPath(logger.dir()));
+ipcMain.on('log', (_e, level, msg) => (['info', 'warn', 'error'].includes(level) ? logger[level] : logger.info)(`[interface] ${msg}`));
+
+/* Raccourcis clavier globaux (actifs même quand un jeu a le focus) ------ */
+ipcMain.handle('hotkeys:set', (_e, map) => {
+  globalShortcut.unregisterAll();
+  const failed = [];
+  for (const [action, accel] of Object.entries(map || {})) {
+    if (!accel) continue;
+    try {
+      if (!globalShortcut.register(accel, () => send('hotkey', action))) failed.push(accel);
+    } catch {
+      failed.push(accel);
+    }
+  }
+  return failed;
+});
+
+/* Zone de notification ------------------------------------------------ */
+let tray = null;
+let trayEnabled = false;
+ipcMain.on('tray:set', (_e, enabled) => {
+  trayEnabled = Boolean(enabled);
+  if (!trayEnabled && tray) {
+    tray.destroy();
+    tray = null;
+    if (win && !win.isVisible()) win.show();
+  }
+});
+
+function showTray() {
+  if (tray) return;
+  tray = new Tray(nativeImage.createFromPath(path.join(__dirname, '..', 'assets', 'icon.png')).resize({ width: 16, height: 16 }));
+  tray.setToolTip('MyStream');
+  const restore = () => {
+    if (!win) return;
+    win.show();
+    win.focus();
+    tray.destroy();
+    tray = null;
+  };
+  tray.on('click', restore);
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: 'Afficher MyStream', click: restore },
+      { label: 'Démarrer / arrêter le streaming', click: () => send('hotkey', 'toggleStream') },
+      { label: "Démarrer / arrêter l'enregistrement", click: () => send('hotkey', 'toggleRecord') },
+      { type: 'separator' },
+      { label: 'Quitter', click: () => win && win.close() },
+    ])
+  );
+}
 
 ipcMain.handle('capture:sources', async (_e, withThumbnails = true) => {
   const size = withThumbnails ? { width: 320, height: 180 } : { width: 0, height: 0 };
@@ -369,6 +480,16 @@ function createWindow() {
     },
   });
   win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+  win.on('minimize', () => {
+    if (!trayEnabled || process.platform === 'darwin') return;
+    showTray();
+    win.hide();
+  });
+  win.webContents.on('console-message', (e) => {
+    const level = e.level === 'error' || e.level === 3 ? 'error' : e.level === 'warning' || e.level === 2 ? 'warn' : null;
+    if (level) logger[level](`[interface] ${e.message}`);
+  });
+  win.webContents.on('render-process-gone', (_e, d) => logger.error("Le processus de l'interface s'est arrêté :", d.reason));
   win.on('closed', () => {
     win = null;
     browserSources.destroyAll();
@@ -382,6 +503,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on('second-instance', () => {
     if (win) {
       if (win.isMinimized()) win.restore();
+      win.show();
       win.focus();
     }
   });
@@ -398,6 +520,7 @@ if (!app.requestSingleInstanceLock()) {
       await systemPreferences.askForMediaAccess('microphone').catch(() => {});
     }
 
+    logger.info(`MyStream ${app.getVersion()} démarré (${process.platform}, Electron ${process.versions.electron})`);
     createWindow();
     updater.init(send);
     if (FFMPEG) encoders.detect(FFMPEG);
@@ -405,6 +528,8 @@ if (!app.requestSingleInstanceLock()) {
       if (!win) createWindow();
     });
   });
+
+  app.on('will-quit', () => globalShortcut.unregisterAll());
 
   app.on('window-all-closed', async () => {
     await Promise.all([...outputs.keys()].map(stopOutput));

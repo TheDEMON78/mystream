@@ -18,6 +18,12 @@
   MS.syncGlobalAudio();
   MS.runtimes.sync();
   MS.ui.init();
+  MS.history.init();
+  window.api.onHotkey((action) => MS.hotkeys.run(action));
+  MS.hotkeys.apply();
+  window.api.setTray(MS.store.settings.ui.minimizeToTray);
+  MS.on('settings:changed', () => window.api.setTray(MS.store.settings.ui.minimizeToTray));
+  if (MS.store.fresh) setTimeout(() => MS.openWizard(), 600);
 
   if (!MS.appInfo.ffmpeg) MS.toast('FFmpeg introuvable : le streaming est désactivé et les enregistrements seront en WebM/MKV bruts.', 'error', 10000);
 

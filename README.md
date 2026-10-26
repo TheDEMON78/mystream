@@ -27,7 +27,25 @@ Composez vos scènes à partir de plusieurs sources (écran, webcam, images, vid
 - **Enregistrement** : MP4 (H.264/AAC), MKV ou WebM, dossier configurable.
 - **Paramètres** : résolution du canevas (dont vertical 1080×1920), FPS, débits, préréglage x264, périphérique micro.
 - **Barre d'état** : FPS de rendu (cadence exacte, jamais au-dessus de la valeur demandée), images manquées, CPU/mémoire, durée du live et de l'enregistrement.
-- **Menus et docks** : Fichier / Affichage / Docks / Aide, chaque dock peut être masqué.
+- **Menus et docks** : Fichier / Édition / Affichage / Docks / Aide, chaque dock peut être masqué.
+
+### Ce que MyStream corrige par rapport aux reproches faits à OBS
+
+| Problème fréquent avec OBS | Dans MyStream |
+| --- | --- |
+| Un enregistrement MP4 interrompu (plantage, coupure de courant) est perdu | MP4 **fragmenté** : le fichier reste lisible jusqu'aux 2 dernières secondes |
+| Images perdues sans savoir pourquoi | **Pastille de santé** (barre d'état) qui explique la cause : rendu surchargé, encodeur ou connexion saturés, avec la solution |
+| Coupure réseau = live arrêté | **Reconnexion automatique** toutes les 10 s (25 essais), le chronomètre du live continue |
+| Interface intimidante au premier lancement | **Assistant de configuration** : plateforme, clé, qualité adaptée au PC, micro, capture d'écran |
+| Pas de « Ctrl+Z » fiable | **Annuler / rétablir** (Ctrl+Z, Ctrl+Y) sur les scènes et sources, même après un import |
+| Live arrêté par un clic malheureux | **Confirmation** avant d'arrêter le streaming (désactivable) |
+| Filtres audio difficiles à trouver | **Filtres audio** directement depuis le mixeur : gain, noise gate, compresseur, limiteur |
+| Réglage cassé sans retour possible | Bouton **Valeurs par défaut** dans chaque onglet des paramètres |
+| Scènes perdues après une mauvaise manipulation | **Sauvegarde automatique quotidienne** (14 jours), export / import de la collection de scènes |
+| Débit trop élevé pour la plateforme | **Alerte** si le débit dépasse la limite de Twitch (6000 kb/s) ou Kick (8000 kb/s) |
+| Disque plein en plein enregistrement | **Alerte** sous 5 Go libres, arrêt propre sous 300 Mo pour protéger le fichier |
+
+Autres ajouts : raccourcis clavier globaux (fonctionnent même en jeu), transformation au pixel près (Ctrl+E), dupliquer une scène, réduction dans la zone de notification, journal d'événements (*Aide > Ouvrir le dossier des journaux*).
 - Configuration (scènes, sources, réglages) sauvegardée automatiquement.
 
 ## Téléchargement

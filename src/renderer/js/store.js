@@ -24,7 +24,13 @@
         transition: { type: 'fade', duration: 300 },
         restream: { url: 'http://localhost:3050', password: '', allowSelfSigned: true, rtmpUrl: '' },
         chat: { mode: 'off', twitchChannel: '', kickChannel: '', kickChatroomId: '' },
-        ui: { studio: false, docks: { scenes: true, sources: true, mixer: true, transitions: true, controls: true, chat: true } },
+        ui: {
+          studio: false,
+          docks: { scenes: true, sources: true, mixer: true, transitions: true, controls: true, chat: true },
+          minimizeToTray: false,
+          confirmStopStream: true,
+          hotkeys: { toggleStream: '', toggleRecord: '', toggleMic: '', nextScene: '', prevScene: '', transition: '' },
+        },
       },
       sources: {},
       scenes: [],
@@ -42,6 +48,8 @@
     return out;
   }
 
+  MS.defaultSettings = () => defaults().settings;
+
   const store = {
     data: null,
 
@@ -54,6 +62,7 @@
       }
       const d = defaults();
       this.data = saved ? { ...d, ...saved, settings: deepMerge(d.settings, saved.settings) } : d;
+      this.fresh = !saved; // premier lancement : l'assistant de configuration s'ouvrira
       if (!this.data.scenes.length) this.addScene('Scène', true);
       if (!this.scene(this.data.currentSceneId)) this.data.currentSceneId = this.data.scenes[0].id;
       if (!this.scene(this.data.previewSceneId)) this.data.previewSceneId = this.data.currentSceneId;
@@ -125,6 +134,21 @@
       MS.emit('scenes:changed');
       MS.emit('sources:changed');
       return true;
+    },
+
+    /** Copie d'une scène : mêmes sources (référencées, comme dans OBS), nouvelles positions indépendantes. */
+    duplicateScene(id) {
+      const scene = this.scene(id);
+      if (!scene) return null;
+      const copy = {
+        id: MS.uid(),
+        name: this.uniqueName(`${scene.name} (copie)`, this.data.scenes.map((s) => s.name)),
+        items: scene.items.map((it) => ({ ...it, id: MS.uid() })),
+      };
+      this.data.scenes.splice(this.data.scenes.indexOf(scene) + 1, 0, copy);
+      this.save();
+      MS.emit('scenes:changed');
+      return copy;
     },
 
     moveScene(id, delta) {

@@ -89,7 +89,12 @@
         'chat-settings': () => MS.openSettings('chat'),
         'source-up': () => this.moveSelected(-1),
         'source-down': () => this.moveSelected(1),
-        stream: () => MS.outputs.toggle('stream'),
+        stream: async () => {
+          // Comme le demandent beaucoup d'utilisateurs d'OBS : pas d'arrêt du live par un clic malheureux.
+          const live = MS.outputs.active.stream || MS.outputs.reconnect;
+          if (live && store().settings.ui.confirmStopStream && !(await MS.confirm('Arrêter le streaming', 'Arrêter le live maintenant ?', 'Arrêter'))) return;
+          MS.outputs.toggle('stream');
+        },
         record: () => MS.outputs.toggle('record'),
         settings: () => MS.openSettings(),
         folder: () => window.api.openPath(store().settings.output.recordPath || MS.appInfo.videosPath),
@@ -111,6 +116,11 @@
       if (!ok) return;
       MS.preview.select(null);
       store().removeItem(store().editScene().id, item.id);
+    },
+
+    duplicateScene(id) {
+      const copy = store().duplicateScene(id);
+      if (copy) this.activateScene(copy.id);
     },
 
     /** Clic sur une scène : en mode studio elle va dans l'aperçu, sinon directement à l'antenne. */
@@ -143,6 +153,7 @@
                   [
                     { label: 'Renommer…', action: () => rename(s) },
                     { label: 'Passer à l’antenne', action: () => MS.compositor.switchScene(s.id) },
+                    { label: 'Dupliquer', action: () => this.duplicateScene(s.id) },
                     { label: 'Supprimer', action: () => MS.$('[data-act="scene-remove"]').click() },
                   ],
                   e.clientX,
@@ -261,6 +272,7 @@
           { label: "Étirer à l'écran", action: () => MS.preview.transform(item, 'stretch') },
           { label: "Centrer à l'écran", action: () => MS.preview.transform(item, 'center') },
           { label: 'Taille d’origine', action: () => MS.preview.transform(item, 'reset') },
+          { label: 'Modifier la transformation…', action: () => MS.openTransform(item) },
           { separator: true },
           { label: 'Monter', action: () => store().moveItem(sceneId, item.id, -1) },
           { label: 'Descendre', action: () => store().moveItem(sceneId, item.id, 1) },
@@ -359,11 +371,35 @@
             },
             MS.icon('headphones')
           );
-          const props = el('button', { class: 'icon-btn off', title: 'Propriétés', onclick: () => MS.openProperties(src.id) }, MS.icon('gear'));
+          const props = el(
+            'button',
+            {
+              class: 'icon-btn off',
+              title: 'Filtres audio et propriétés',
+              onclick: (e) => {
+                const r = e.currentTarget.getBoundingClientRect();
+                this.showMenu(
+                  [
+                    { label: 'Filtres audio (gain, noise gate, compresseur)…', action: () => MS.openAudioFilters(src.id) },
+                    { label: 'Propriétés…', action: () => MS.openProperties(src.id) },
+                  ],
+                  r.left,
+                  r.bottom + 2
+                );
+              },
+            },
+            MS.icon('gear')
+          );
           return el(
             'div',
             { class: `channel ${src.muted ? 'muted' : ''}`, dataset: { id: src.id } },
-            el('div', { class: 'channel-head' }, el('span', { class: 'name', text: src.name }), db),
+            el(
+              'div',
+              { class: 'channel-head' },
+              el('span', { class: 'name', text: src.name }),
+              hasAudioFx(src) ? el('span', { class: 'fx', text: 'FX', title: 'Filtres audio actifs' }) : null,
+              db
+            ),
             el('div', { class: 'meter' }, el('div', { class: 'meter-cover' }), el('div', { class: 'meter-ticks' })),
             el('div', { class: 'channel-controls' }, fader, mute, monitor, props)
           );
@@ -414,6 +450,11 @@
         b.disabled = o.busy[kind];
       };
       setBtn('#btn-stream', 'stream', 'Arrêter le streaming', 'Démarrer le streaming');
+      if (o.reconnect) {
+        const b = MS.$('#btn-stream');
+        b.textContent = `Reconnexion ${o.reconnect.attempt}… (cliquer pour arrêter)`;
+        b.classList.add('live');
+      }
       setBtn('#btn-record', 'record', "Arrêter l'enregistrement", "Démarrer l'enregistrement");
       MS.$('#btn-studio').classList.toggle('on', store().settings.ui.studio);
     },
@@ -508,9 +549,21 @@
       const menus = {
         file: [
           { label: 'Afficher les enregistrements', action: () => MS.$('[data-act="folder"]').click() },
+          { separator: true },
+          { label: 'Exporter la collection de scènes…', action: () => MS.exportCollection() },
+          { label: 'Importer une collection de scènes…', action: () => MS.importCollection(false) },
+          { label: 'Restaurer une sauvegarde automatique…', action: () => MS.importCollection(true) },
+          { separator: true },
           { label: 'Paramètres', action: () => MS.openSettings() },
           { separator: true },
           { label: 'Quitter', action: () => window.close() },
+        ],
+        edit: [
+          { label: 'Annuler                      Ctrl+Z', action: () => MS.history.undo() },
+          { label: 'Rétablir                      Ctrl+Y', action: () => MS.history.redo() },
+          { separator: true },
+          { label: 'Modifier la transformation   Ctrl+E', disabled: !MS.preview.selectedItem(), action: () => MS.openTransform(MS.preview.selectedItem()) },
+          { label: 'Dupliquer la scène', action: () => this.duplicateScene(store().editScene().id) },
         ],
         view: [
           { label: check(ui.studio, 'Mode studio'), action: () => store().setStudio(!ui.studio) },
@@ -518,7 +571,9 @@
         ],
         docks: Object.entries(DOCK_LABELS).map(([k, label]) => ({ label: check(ui.docks[k], label), action: () => this.toggleDock(k) })),
         help: [
+          { label: 'Assistant de configuration…', action: () => MS.openWizard() },
           { label: 'Rechercher des mises à jour', action: () => this.checkUpdates() },
+          { label: 'Ouvrir le dossier des journaux', action: () => window.api.openLogs() },
           { separator: true },
           { label: 'Page du projet (GitHub)', action: () => window.api.openExternal('https://github.com/TheDEMON78/mystream') },
           { label: 'Nouveautés (releases)', action: () => window.api.openExternal('https://github.com/TheDEMON78/mystream/releases') },
@@ -587,6 +642,12 @@
       const rec = MS.$('#status-rec');
       const perf = MS.$('#status-perf');
       const fps = MS.$('#status-fps');
+      const health = MS.$('#status-health');
+      MS.on('health:changed', (h) => {
+        health.className = `health ${h.level}`;
+        health.title = h.message;
+      });
+      health.addEventListener('click', () => MS.toast(MS.outputs.health.message || 'Aucune sortie active.', 'info', 8000));
       const rs = MS.$('#status-restream');
       let cpu = null;
       const pollRestream = async () => {
@@ -624,9 +685,11 @@
       setInterval(() => {
         const { stream, record } = MS.outputs.active;
         const now = performance.now();
-        live.classList.toggle('on', Boolean(stream));
+        const rc = MS.outputs.reconnect;
+        live.classList.toggle('on', Boolean(stream || rc));
         rec.classList.toggle('on', Boolean(record));
-        let liveText = `LIVE ${stream ? MS.formatTime(now - stream.startedAt) : '00:00:00'}`;
+        const liveStart = stream ? stream.liveStart || stream.startedAt : rc ? rc.liveStart : 0;
+        let liveText = `${rc ? 'RECONNEXION' : 'LIVE'} ${liveStart ? MS.formatTime(now - liveStart) : '00:00:00'}`;
         if (stream && stream.progress && stream.progress.bitrate) liveText += ` · ${Math.round(stream.progress.bitrate)} kb/s`;
         live.textContent = liveText;
         rec.textContent = `REC ${record ? MS.formatTime(now - record.startedAt) : '00:00:00'}`;
@@ -639,6 +702,11 @@
   };
 
   const DOCK_LABELS = { scenes: 'Scènes', sources: 'Sources', mixer: 'Mixeur audio', transitions: 'Transitions', controls: 'Commandes', chat: 'Chat' };
+
+  function hasAudioFx(src) {
+    const f = src.audioFilters;
+    return Boolean(f && (f.gain || f.gate || f.compressor || f.limiter));
+  }
 
   function gainLabel(g) {
     return g <= 0 ? '-∞ dB' : `${(20 * Math.log10(g)).toFixed(1)} dB`;

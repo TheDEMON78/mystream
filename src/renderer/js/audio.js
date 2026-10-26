@@ -3,6 +3,20 @@
 (function () {
   const MS = window.MS;
 
+  MS.audioFilterDefaults = () => ({
+    gain: 0,
+    gate: false,
+    gateThreshold: -45,
+    gateRelease: 150,
+    compressor: false,
+    compThreshold: -18,
+    compRatio: 4,
+    compMakeup: 4,
+    limiter: false,
+  });
+
+  const dbToGain = (db) => Math.pow(10, db / 20);
+
   const audio = {
     ctx: null,
     dest: null,
@@ -25,6 +39,77 @@
       MS.on('runtime:disposed', (id) => this.detach(id));
       for (const evt of ['scene:switched', 'items:changed', 'sources:changed']) MS.on(evt, () => this.updateGains());
       document.addEventListener('pointerdown', () => this.ctx.state === 'suspended' && this.ctx.resume(), true);
+      this.gateReady = this.ctx.audioWorklet
+        .addModule('js/gate-worklet.js')
+        .then(() => true)
+        .catch((e) => {
+          console.warn('Noise gate indisponible', e);
+          return false;
+        });
+    },
+
+    /**
+     * Chaîne de filtres d'une source : gain → noise gate → compresseur →
+     * limiteur, puis le fader. Reconstruite à chaque modification.
+     */
+    async buildChain(ch) {
+      // Plusieurs réglages rapides (curseurs) : seule la dernière reconstruction compte.
+      const build = (ch.build = (ch.build || 0) + 1);
+      const gateOk = await this.gateReady;
+      if (ch.build !== build || this.channels.get(ch.id) !== ch) return;
+      const src = MS.store.source(ch.id);
+      const f = { ...MS.audioFilterDefaults(), ...((src && src.audioFilters) || {}) };
+      const ctx = this.ctx;
+      try {
+        ch.node.disconnect();
+      } catch {
+        /* pas encore connecté */
+      }
+      for (const n of ch.chain || []) n.disconnect();
+      const chain = [];
+      if (f.gain) {
+        const g = ctx.createGain();
+        g.gain.value = dbToGain(f.gain);
+        chain.push(g);
+      }
+      if (f.gate && gateOk) {
+        const gate = new AudioWorkletNode(ctx, 'noise-gate', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2] });
+        gate.parameters.get('threshold').value = f.gateThreshold;
+        gate.parameters.get('release').value = f.gateRelease;
+        chain.push(gate);
+      }
+      if (f.compressor) {
+        const c = ctx.createDynamicsCompressor();
+        c.threshold.value = f.compThreshold;
+        c.ratio.value = f.compRatio;
+        c.knee.value = 6;
+        c.attack.value = 0.006;
+        c.release.value = 0.1;
+        const makeup = ctx.createGain();
+        makeup.gain.value = dbToGain(f.compMakeup);
+        chain.push(c, makeup);
+      }
+      if (f.limiter) {
+        const l = ctx.createDynamicsCompressor();
+        l.threshold.value = -1;
+        l.ratio.value = 20;
+        l.knee.value = 0;
+        l.attack.value = 0.001;
+        l.release.value = 0.05;
+        chain.push(l);
+      }
+      ch.chain = chain;
+      let prev = ch.node;
+      for (const n of chain) {
+        prev.connect(n);
+        prev = n;
+      }
+      prev.connect(ch.gain);
+    },
+
+    refreshFilters(id) {
+      const ch = this.channels.get(id);
+      if (ch) this.buildChain(ch);
     },
 
     attach(rt) {
@@ -45,12 +130,13 @@
       analyser.fftSize = 1024;
       gain.gain.value = 0;
       monitor.gain.value = 0;
-      node.connect(gain);
       gain.connect(analyser);
       gain.connect(this.dest);
       gain.connect(monitor);
       monitor.connect(ctx.destination);
-      this.channels.set(id, { id, node, gain, monitor, analyser, buf: new Float32Array(analyser.fftSize), peak: -Infinity });
+      const ch = { id, node, gain, monitor, analyser, chain: [], buf: new Float32Array(analyser.fftSize), peak: -Infinity };
+      this.channels.set(id, ch);
+      this.buildChain(ch);
       this.updateGains();
       MS.emit('mixer:changed');
     },
@@ -58,7 +144,7 @@
     detach(id) {
       const ch = this.channels.get(id);
       if (!ch) return;
-      for (const n of [ch.node, ch.gain, ch.monitor]) {
+      for (const n of [ch.node, ch.gain, ch.monitor, ...(ch.chain || [])]) {
         try {
           n.disconnect();
         } catch {

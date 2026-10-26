@@ -37,5 +37,13 @@ contextBridge.exposeInMainWorld('api', {
   updateState: () => ipcRenderer.invoke('update:state'),
   updateInstall: () => ipcRenderer.send('update:install'),
   onUpdateState: listen('update:state'),
+  exportConfig: (data) => ipcRenderer.invoke('config:export', data),
+  importConfig: (fromBackups) => ipcRenderer.invoke('config:import', fromBackups),
+  diskFree: (dir) => ipcRenderer.invoke('disk:free', dir),
+  openLogs: () => ipcRenderer.invoke('logs:open'),
+  log: (level, msg) => ipcRenderer.send('log', level, msg),
+  setHotkeys: (map) => ipcRenderer.invoke('hotkeys:set', map),
+  onHotkey: listen('hotkey'),
+  setTray: (enabled) => ipcRenderer.send('tray:set', enabled),
   quit: () => ipcRenderer.send('app:quit'),
 });

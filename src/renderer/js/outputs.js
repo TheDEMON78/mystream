@@ -35,7 +35,14 @@
       // Le flux de streaming est réencodé par FFmpeg : on lui envoie une source de haute qualité.
       const vb = this.kind === 'record' ? settings.output.videoBitrate : Math.max(settings.stream.videoBitrate * 2, 8000);
       const ab = this.kind === 'record' ? settings.output.audioBitrate : settings.stream.audioBitrate;
-      this.recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: vb * 1000, audioBitsPerSecond: ab * 1000 });
+      // Une image clé toutes les 2 s : indispensable pour que l'enregistrement
+      // reste lisible après une coupure et pour la navigation dans la vidéo.
+      this.recorder = new MediaRecorder(stream, {
+        mimeType: mime,
+        videoBitsPerSecond: vb * 1000,
+        audioBitsPerSecond: ab * 1000,
+        videoKeyFrameIntervalDuration: 2000,
+      });
       this.recorder.ondataavailable = (e) => {
         if (!e.data.size) return;
         this.queue = this.queue.then(() => e.data.arrayBuffer()).then((buf) => window.api.outputChunk(this.id, buf));
@@ -60,9 +67,16 @@
     }
   }
 
+  const RECONNECT_DELAY = 10; // secondes, comme OBS
+  const RECONNECT_RETRIES = 25;
+  const DISK_WARN = 5 * 1024 ** 3;
+  const DISK_STOP = 300 * 1024 ** 2;
+
   const outputs = {
     active: { record: null, stream: null },
     busy: { record: false, stream: false },
+    reconnect: null,
+    health: { level: 'idle', message: '' },
     _stream: null,
 
     init() {
@@ -70,6 +84,8 @@
       window.api.onOutputProgress((d) => {
         for (const o of Object.values(this.active)) if (o && o.id === d.id) o.progress = d;
       });
+      setInterval(() => this.checkHealth(), 2000);
+      setInterval(() => this.checkDisk(), 30000);
     },
 
     /** Flux composite : image du canvas + mixage audio. */
@@ -89,21 +105,31 @@
     },
 
     isAnyActive() {
-      return Boolean(this.active.record || this.active.stream);
+      return Boolean(this.active.record || this.active.stream || this.reconnect);
     },
 
     async toggle(kind) {
       if (this.busy[kind]) return;
-      if (this.active[kind]) await this.stop(kind);
+      if (this.active[kind] || (kind === 'stream' && this.reconnect)) await this.stop(kind);
       else await this.start(kind);
     },
 
     async start(kind) {
       this.busy[kind] = true;
       MS.emit('outputs:changed');
-      const out = new Output(kind);
       try {
-        await out.start(this.stream());
+        if (kind === 'record') {
+          const free = await window.api.diskFree(MS.store.settings.output.recordPath);
+          if (free != null && free < DISK_STOP) throw new Error(`espace disque insuffisant (${formatBytes(free)} libres)`);
+          if (free != null && free < DISK_WARN) MS.toast(`Attention : seulement ${formatBytes(free)} libres sur le disque d'enregistrement.`, 'error', 8000);
+        }
+        const out = new Output(kind);
+        try {
+          await out.start(this.stream());
+        } catch (e) {
+          if (out.id) window.api.outputStop(out.id);
+          throw e;
+        }
         this.active[kind] = out;
         if (kind === 'record') MS.toast(`Enregistrement démarré : ${out.file}`, 'info', 3500);
         else {
@@ -111,7 +137,6 @@
           MS.toast(`Streaming démarré · encodeur ${enc}`, 'info', 3500);
         }
       } catch (e) {
-        if (out.id) window.api.outputStop(out.id);
         MS.toast(`Impossible de démarrer ${LABELS[kind]} : ${e.message}`, 'error', 8000);
       } finally {
         this.busy[kind] = false;
@@ -120,6 +145,11 @@
     },
 
     async stop(kind) {
+      if (kind === 'stream' && this.reconnect) {
+        clearTimeout(this.reconnect.timer);
+        this.reconnect = null;
+        MS.emit('outputs:changed');
+      }
       const out = this.active[kind];
       if (!out) return;
       this.busy[kind] = true;
@@ -144,11 +174,107 @@
         if (out.recorder && out.recorder.state !== 'inactive') out.recorder.stop();
         window.api.outputStop(id);
         this.active[kind] = null;
-        MS.toast(`Arrêt de ${LABELS[kind]} : ${error || 'erreur inconnue'}`, 'error', 12000);
+        window.api.log('error', `${kind} interrompu : ${error}`);
+        if (kind === 'stream') this.scheduleReconnect(out, error);
+        else MS.toast(`Arrêt de ${LABELS[kind]} : ${error || 'erreur inconnue'}`, 'error', 12000);
         MS.emit('outputs:changed');
       }
     },
+
+    /**
+     * Reconnexion automatique après une coupure (réseau, serveur…), comme
+     * OBS : nouvel essai toutes les 10 s, le chronomètre du live continue.
+     */
+    scheduleReconnect(prev, error) {
+      // Une connexion restée stable plus d'une minute remet le compteur à zéro.
+      const stable = prev.startedAt && performance.now() - (prev.connectedAt || prev.startedAt) > 60000;
+      const attempt = stable ? 1 : (prev.attempt || 0) + 1;
+      const liveStart = prev.liveStart || prev.startedAt || performance.now();
+      if (attempt > RECONNECT_RETRIES) {
+        this.reconnect = null;
+        MS.toast(`Streaming arrêté après ${RECONNECT_RETRIES} tentatives de reconnexion : ${error || 'erreur inconnue'}`, 'error', 15000);
+        return;
+      }
+      MS.toast(`Connexion au serveur perdue (${error || 'erreur inconnue'}). Reconnexion dans ${RECONNECT_DELAY} s (${attempt}/${RECONNECT_RETRIES})…`, 'error', 8000);
+      const r = { attempt, liveStart, error };
+      r.timer = setTimeout(async () => {
+        if (this.reconnect !== r) return;
+        const out = new Output('stream');
+        out.attempt = attempt;
+        out.liveStart = liveStart;
+        try {
+          await out.start(this.stream());
+          if (this.reconnect !== r) {
+            out.stop();
+            return;
+          }
+          this.reconnect = null;
+          this.active.stream = out;
+          out.connectedAt = performance.now();
+          MS.toast('Reconnecté au serveur de streaming.', 'success', 5000);
+        } catch (e) {
+          if (out.id) window.api.outputStop(out.id);
+          if (this.reconnect === r) this.scheduleReconnect({ attempt, liveStart }, e.message);
+        }
+        MS.emit('outputs:changed');
+      }, RECONNECT_DELAY * 1000);
+      this.reconnect = r;
+    },
+
+    /** Surveille l'encodeur et le rendu pour expliquer clairement les images perdues. */
+    checkHealth() {
+      const stream = this.active.stream;
+      const stats = MS.compositor.stats;
+      const lagged = stats.lagged - (this.lastLagged ?? stats.lagged);
+      this.lastLagged = stats.lagged;
+      let level = 'good';
+      let message = 'Tout va bien.';
+      const fps = MS.store.settings.video.fps;
+      // Deux relevés consécutifs au-delà de 10 % : on ignore les à-coups ponctuels (démarrage…).
+      this.lagStreak = lagged > fps * 0.2 ? (this.lagStreak || 0) + 1 : 0;
+      if (this.lagStreak >= 2) {
+        level = 'warn';
+        message = `Rendu surchargé (${lagged} images manquées en 2 s) : réduis la résolution ou les FPS, ou retire des sources lourdes (pages web animées, captures multiples).`;
+      }
+      if (stream && stream.progress && stream.progress.speed) {
+        stream.slow = stream.progress.speed < 0.93 ? (stream.slow || 0) + 1 : 0;
+        if (stream.slow >= 3) {
+          level = 'bad';
+          message = `Encodeur ou connexion saturés (vitesse ${stream.progress.speed.toFixed(2)}×) : baisse le débit vidéo, choisis un encodeur matériel (NVENC…) ou vérifie ta connexion.`;
+        }
+      }
+      if (this.reconnect) {
+        level = 'bad';
+        message = `Reconnexion en cours (${this.reconnect.attempt}/${RECONNECT_RETRIES}) : ${this.reconnect.error || ''}`;
+      }
+      if (!this.isAnyActive() && level === 'good') level = 'idle';
+      const changed = level !== this.health.level || message !== this.health.message;
+      this.health = { level, message };
+      if (changed) MS.emit('health:changed', this.health);
+      // Prévient une seule fois par problème (toutes les 2 minutes au plus).
+      if ((level === 'warn' || level === 'bad') && this.isAnyActive() && !this.reconnect && performance.now() - (this.lastHealthToast || -1e9) > 120000) {
+        this.lastHealthToast = performance.now();
+        MS.toast(message, 'error', 10000);
+      }
+    },
+
+    async checkDisk() {
+      if (!this.active.record) return;
+      const free = await window.api.diskFree(MS.store.settings.output.recordPath);
+      if (free == null) return;
+      if (free < DISK_STOP) {
+        MS.toast(`Disque presque plein (${formatBytes(free)}) : enregistrement arrêté pour protéger le fichier.`, 'error', 15000);
+        this.stop('record');
+      } else if (free < DISK_WARN && !this.diskWarned) {
+        this.diskWarned = true;
+        MS.toast(`Attention : il ne reste que ${formatBytes(free)} sur le disque d'enregistrement.`, 'error', 10000);
+      }
+    },
   };
+
+  function formatBytes(n) {
+    return n >= 1024 ** 3 ? `${(n / 1024 ** 3).toFixed(1)} Go` : `${Math.round(n / 1024 ** 2)} Mo`;
+  }
 
   MS.outputs = outputs;
 })();

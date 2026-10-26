@@ -43,7 +43,13 @@
           el(
             'div',
             { class: 'modal-buttons' },
-            btns.map((b) => el('button', { class: b.primary ? 'btn primary' : 'btn', text: b.label, onclick: () => close(b.value) }))
+            btns.map((b) =>
+              el('button', {
+                class: `${b.primary ? 'btn primary' : 'btn'} ${b.left ? 'left' : ''}`,
+                text: b.label,
+                onclick: () => (b.onClick ? b.onClick() : close(b.value)),
+              })
+            )
           )
         )
       );
@@ -184,6 +190,23 @@
           });
           input = el('div', { class: 'file-row' }, text, browse);
           getters[f.key] = () => text.value;
+          break;
+        }
+        case 'hotkey': {
+          // Capture de la combinaison pressée ; Retour arrière ou Suppr pour effacer.
+          const hk = el('input', { class: 'input hotkey', type: 'text', readonly: true, value: v || '', placeholder: 'Cliquer puis appuyer sur les touches' });
+          hk.addEventListener('keydown', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (e.key === 'Backspace' || e.key === 'Delete') hk.value = '';
+            else {
+              const acc = MS.keyToAccelerator(e);
+              if (acc) hk.value = acc;
+            }
+            changed();
+          });
+          input = hk;
+          getters[f.key] = () => hk.value;
           break;
         }
         case 'password': {
@@ -381,6 +404,21 @@
           { key: 'key', type: 'password', label: 'Clé de stream', showIf: (v) => v.service !== 'restream' },
           { key: 'encoder', type: 'select', label: 'Encodeur vidéo', options: [{ value: 'auto', label: `Automatique (${(MS.encoders[0] || { label: 'x264' }).label})` }, ...MS.encoders.map((e) => ({ value: e.id, label: e.label }))] },
           { key: 'videoBitrate', type: 'number', label: 'Débit vidéo (kb/s)', min: 500, max: 50000, step: 100 },
+          {
+            type: 'info',
+            text: '⚠ Twitch recommande 6000 kb/s maximum : au-delà, tes viewers sans transcodage risquent des saccades.',
+            showIf: (v) => v.service === 'twitch' && Number(v.videoBitrate) > 6000,
+          },
+          {
+            type: 'info',
+            text: '⚠ Kick accepte 8000 kb/s maximum.',
+            showIf: (v) => v.service === 'kick' && Number(v.videoBitrate) > 8000,
+          },
+          {
+            type: 'info',
+            text: '⚠ Avec Restream, ce débit part tel quel vers Twitch (6000 kb/s max conseillé) et Kick (8000 max).',
+            showIf: (v) => v.service === 'restream' && Number(v.videoBitrate) > 6000,
+          },
           { key: 'audioBitrate', type: 'select', label: 'Débit audio (kb/s)', options: [96, 128, 160, 192, 256, 320].map((v) => ({ value: v, label: String(v) })) },
           {
             key: 'preset',
@@ -475,6 +513,20 @@
         ],
         values: { ...st.audio },
       },
+      general: {
+        label: 'Général',
+        fields: [
+          { key: 'confirmStopStream', type: 'checkbox', label: 'Demander confirmation avant d’arrêter le streaming' },
+          { key: 'minimizeToTray', type: 'checkbox', label: 'Réduire dans la zone de notification' },
+          { type: 'section', label: 'Raccourcis clavier (fonctionnent même en jeu)' },
+          ...Object.entries(MS.HOTKEY_LABELS).map(([key, label]) => ({ key: `hk_${key}`, type: 'hotkey', label })),
+        ],
+        values: {
+          confirmStopStream: st.ui.confirmStopStream,
+          minimizeToTray: st.ui.minimizeToTray,
+          ...Object.fromEntries(Object.keys(MS.HOTKEY_LABELS).map((k) => [`hk_${k}`, (st.ui.hotkeys || {})[k] || ''])),
+        },
+      },
       video: {
         label: 'Vidéo',
         fields: [
@@ -490,6 +542,7 @@
     const panes = {};
     const nav = el('div', { class: 'tabs' });
     const body = el('div', { class: 'tab-body' });
+    let current = 'stream';
     for (const [key, tab] of Object.entries(tabs)) {
       forms[key] = MS.buildForm(tab.fields, tab.values, key === 'stream' ? onStreamChange : null);
       panes[key] = el('div', { class: 'tab-pane' }, forms[key].element);
@@ -497,6 +550,7 @@
       nav.append(el('button', { class: 'tab', text: tab.label, dataset: { tab: key }, onclick: () => show(key) }));
     }
     function show(key) {
+      current = key;
       for (const [k, p] of Object.entries(panes)) p.hidden = k !== key;
       nav.querySelectorAll('.tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === key));
     }
@@ -511,13 +565,49 @@
     }
     show(tabs[initialTab] ? initialTab : 'stream');
 
-    const ok = await MS.modal({ title: 'Paramètres', content: el('div', { class: 'settings' }, nav, body), width: 720 });
+    /** Remet l'onglet affiché à ses valeurs d'origine (appliquées seulement avec OK). */
+    function resetTab() {
+      const d = MS.defaultSettings();
+      const defaults = {
+        stream: d.stream,
+        output: d.output,
+        restream: d.restream,
+        chat: d.chat,
+        audio: d.audio,
+        video: { resolution: `${d.video.width}x${d.video.height}`, fps: d.video.fps },
+        general: {
+          confirmStopStream: d.ui.confirmStopStream,
+          minimizeToTray: d.ui.minimizeToTray,
+          ...Object.fromEntries(Object.keys(MS.HOTKEY_LABELS).map((k) => [`hk_${k}`, ''])),
+        },
+      };
+      forms[current] = MS.buildForm(tabs[current].fields, { ...defaults[current] }, current === 'stream' ? onStreamChange : null);
+      panes[current].replaceChildren(forms[current].element);
+      MS.toast(`Onglet « ${tabs[current].label} » remis par défaut (OK pour appliquer).`, 'info', 4000);
+    }
+
+    const ok = await MS.modal({
+      title: 'Paramètres',
+      content: el('div', { class: 'settings' }, nav, body),
+      width: 720,
+      buttons: [
+        { label: 'Valeurs par défaut', left: true, onClick: resetTab },
+        { label: 'Annuler', value: false },
+        { label: 'OK', value: true, primary: true },
+      ],
+    });
     if (!ok) return;
 
     Object.assign(st.stream, forms.stream.values(), { audioBitrate: Number(forms.stream.values().audioBitrate) });
     Object.assign(st.output, forms.output.values(), { audioBitrate: Number(forms.output.values().audioBitrate) });
     Object.assign(st.restream, forms.restream.values());
     Object.assign(st.chat, forms.chat.values());
+    const g = forms.general.values();
+    st.ui.confirmStopStream = g.confirmStopStream;
+    st.ui.minimizeToTray = g.minimizeToTray;
+    const hotkeysBefore = JSON.stringify(st.ui.hotkeys);
+    st.ui.hotkeys = Object.fromEntries(Object.keys(MS.HOTKEY_LABELS).map((k) => [k, g[`hk_${k}`]]));
+    if (JSON.stringify(st.ui.hotkeys) !== hotkeysBefore) MS.hotkeys.apply();
     const a = forms.audio.values();
     Object.assign(st.audio, a);
     const v = forms.video.values();
