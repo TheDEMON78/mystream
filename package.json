@@ -10,7 +10,7 @@
     "url": "https://github.com/TheDEMON78/mystream.git"
   },
   "author": {
-    "name": "TheDEMON78",
+    "name": "BloopStudio",
     "email": "90475756+TheDEMON78@users.noreply.github.com"
   },
   "license": "MIT",
@@ -29,6 +29,7 @@
   "build": {
     "appId": "io.github.thedemon78.mystream",
     "productName": "MyStream",
+    "copyright": "Copyright © 2026 BloopStudio",
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "icon": "src/assets/icon.png",
     "files": [
@@ -58,7 +59,7 @@
         "deb"
       ],
       "category": "AudioVideo",
-      "maintainer": "TheDEMON78 <90475756+TheDEMON78@users.noreply.github.com>"
+      "maintainer": "BloopStudio <90475756+TheDEMON78@users.noreply.github.com>"
     },
     "mac": {
       "target": [
