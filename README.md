@@ -1,7 +1,7 @@
 # MyStream
 
 **MyStream** est un logiciel libre de streaming et d'enregistrement vidéo pour Windows, Linux et macOS, inspiré d'OBS Studio.
-Composez vos scènes à partir de plusieurs sources (écran, webcam, images, vidéos, texte…), mixez l'audio et diffusez en direct sur Twitch, YouTube ou tout serveur RTMP, ou enregistrez en MP4/MKV/WebM.
+Composez vos scènes à partir de plusieurs sources (écran, webcam, images, vidéos, texte…), mixez l'audio et diffusez en direct sur Twitch, YouTube, Kick ou tout serveur RTMP, ou enregistrez en MP4/MKV/WebM.
 
 ## Fonctionnalités
 
@@ -15,7 +15,7 @@ Composez vos scènes à partir de plusieurs sources (écran, webcam, images, vid
   - Réutilisation d'une source existante dans plusieurs scènes
 - **Aperçu interactif** : sélection, déplacement, redimensionnement à la souris (poignées, `Maj` pour déformer, `Alt` pour désactiver l'aimantation), flèches du clavier, `Suppr`, menu contextuel (ajuster/étirer/centrer à l'écran, taille d'origine, ordre, verrouillage).
 - **Mixeur audio** : VU-mètres, faders, muet, écoute (monitoring) par source ; sources globales *Mic/Aux* et *Audio du bureau*.
-- **Streaming RTMP/RTMPS** : Twitch, YouTube, Facebook Live ou serveur personnalisé, encodage x264 + AAC via FFmpeg, débit affiché en direct.
+- **Streaming RTMP/RTMPS** : Twitch, YouTube, Kick, Facebook Live ou serveur personnalisé, encodage x264 + AAC via FFmpeg, débit affiché en direct.
 - **Enregistrement** : MP4 (H.264/AAC), MKV ou WebM, dossier configurable.
 - **Paramètres** : résolution du canevas (dont vertical 1080×1920), FPS, débits, préréglage x264, périphérique micro.
 - **Barre d'état** : FPS de rendu, images en retard, CPU/mémoire, durée du live et de l'enregistrement.

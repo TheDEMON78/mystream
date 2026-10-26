@@ -6,6 +6,7 @@
   const STREAM_SERVICES = {
     twitch: { label: 'Twitch', server: 'rtmp://live.twitch.tv/app' },
     youtube: { label: 'YouTube', server: 'rtmp://a.rtmp.youtube.com/live2' },
+    kick: { label: 'Kick', server: 'rtmps://fa723fc1b171.global-contribute.live-video.net:443/app' },
     facebook: { label: 'Facebook Live', server: 'rtmps://live-api-s.facebook.com:443/rtmp' },
     custom: { label: 'Personnalisé', server: '' },
   };
