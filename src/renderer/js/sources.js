@@ -107,7 +107,39 @@
     }
   }
 
+  /** Lecteur du son capturé par window-audio.exe (Windows). */
+  function winAudioNode(rt, ctx, captureId) {
+    if (!rt.pcm) {
+      rt.pcm = new AudioWorkletNode(ctx, 'pcm-player', { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [2] });
+      window.api.winAudioStart(rt.src.id, captureId);
+    }
+    return rt.pcm;
+  }
+
+  function pushPcm(rt, bytes) {
+    if (!rt.pcm) return;
+    const samples = new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength >> 2);
+    rt.pcm.port.postMessage(samples, [samples.buffer]);
+  }
+
   class DisplayCaptureRuntime extends StreamRuntime {
+    /** Son de la fenêtre capturée (ou du système pour un écran), sous Windows. */
+    wantsAudio() {
+      return Boolean(this.src.settings.captureAudio && MS.appInfo.windowAudio);
+    }
+    hasAudio() {
+      return this.wantsAudio();
+    }
+    audioNode(ctx) {
+      return winAudioNode(this, ctx, this.src.settings.captureId);
+    }
+    pushAudio(bytes) {
+      pushPcm(this, bytes);
+    }
+    dispose() {
+      if (this.pcm) window.api.winAudioStop(this.src.id);
+      super.dispose();
+    }
     async getStream() {
       const s = this.src.settings;
       const list = await window.api.getCaptureSources(false);
@@ -151,6 +183,24 @@
   }
 
   class DesktopAudioRuntime extends StreamRuntime {
+    /** Sous Windows : tout le son du PC sauf MyStream (pas d'écho du retour casque). */
+    async start() {
+      if (!MS.appInfo.windowAudio) return super.start();
+      this.markReady();
+    }
+    hasAudio() {
+      return MS.appInfo.windowAudio ? true : super.hasAudio();
+    }
+    audioNode(ctx) {
+      return MS.appInfo.windowAudio ? winAudioNode(this, ctx, 'screen:system') : super.audioNode(ctx);
+    }
+    pushAudio(bytes) {
+      pushPcm(this, bytes);
+    }
+    dispose() {
+      if (this.pcm) window.api.winAudioStop(this.src.id);
+      super.dispose();
+    }
     async getStream() {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { mandatory: { chromeMediaSource: 'desktop' } },
@@ -524,6 +574,16 @@
       window.api.browserAck(f.id);
     }
   });
+  window.api.onWinAudioData(({ id, data }) => {
+    const rt = MS.runtimes.get(id);
+    if (rt && rt.pushAudio) rt.pushAudio(data);
+  });
+  window.api.onWinAudioError(({ id, error }) => {
+    const rt = MS.runtimes.get(id);
+    if (!rt) return;
+    MS.toast(`Son de « ${rt.src.name} » : ${error}`, 'error', 8000);
+  });
+
   window.api.onBrowserError((e) => {
     const rt = MS.runtimes.get(e.id);
     if (rt) rt.fail(new Error(e.error));
@@ -558,9 +618,14 @@
     display_capture: {
       label: "Capture d'écran / fenêtre",
       glyph: '🖥',
-      defaults: () => ({ captureId: '', captureName: '', captureKind: 'screen' }),
+      defaults: () => ({ captureId: '', captureName: '', captureKind: 'screen', captureAudio: true }),
       create: (src) => new DisplayCaptureRuntime(src),
-      fields: () => [{ key: 'capture', type: 'capture', label: 'Écran ou fenêtre' }],
+      fields: () => [
+        { key: 'capture', type: 'capture', label: 'Écran ou fenêtre' },
+        MS.appInfo.windowAudio
+          ? { key: 'captureAudio', type: 'checkbox', label: 'Capturer le son (fenêtre : son de l’application · écran : son du PC, sans MyStream)' }
+          : { type: 'info', text: 'Le son de la fenêtre se capture sous Windows 10 (version 2004) ou plus récent.' },
+      ],
     },
     video_capture: {
       label: 'Périphérique de capture vidéo',

@@ -10,6 +10,7 @@ const browserSources = require('./browserSources');
 const encoders = require('./encoders');
 const updater = require('./updater');
 const logger = require('./logger');
+const windowAudio = require('./windowAudio');
 
 // Les sources média doivent pouvoir jouer du son sans interaction préalable.
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
@@ -432,6 +433,8 @@ ipcMain.on('browser:create', (_e, id, opts) => browserSources.create(id, opts, s
 ipcMain.on('browser:destroy', (_e, id) => browserSources.destroy(id));
 ipcMain.on('browser:reload', (_e, id) => browserSources.reload(id));
 ipcMain.on('browser:ack', (_e, id) => browserSources.ack(id));
+ipcMain.on('winaudio:start', (_e, id, captureId) => windowAudio.start(id, captureId, send));
+ipcMain.on('winaudio:stop', (_e, id) => windowAudio.stop(id));
 
 ipcMain.handle('update:check', () => updater.check());
 ipcMain.handle('update:state', () => updater.getState());
@@ -440,6 +443,7 @@ ipcMain.on('update:install', () => updater.install());
 ipcMain.handle('app:info', () => ({
   version: app.getVersion(),
   defaultBrowserCss: browserSources.DEFAULT_CSS,
+  windowAudio: windowAudio.available(),
   platform: process.platform,
   ffmpeg: Boolean(FFMPEG),
   videosPath: app.getPath('videos'),
@@ -493,6 +497,7 @@ function createWindow() {
   win.on('closed', () => {
     win = null;
     browserSources.destroyAll();
+    windowAudio.stopAll();
     restreamChat.stop();
   });
 }

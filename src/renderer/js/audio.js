@@ -46,6 +46,7 @@
           console.warn('Noise gate indisponible', e);
           return false;
         });
+      this.pcmReady = this.ctx.audioWorklet.addModule('js/pcm-worklet.js').catch((e) => console.warn('Lecteur PCM indisponible', e));
     },
 
     /**
@@ -112,7 +113,10 @@
       if (ch) this.buildChain(ch);
     },
 
-    attach(rt) {
+    async attach(rt) {
+      // Le lecteur du son de fenêtre est un AudioWorklet : il doit être chargé avant.
+      await this.pcmReady;
+      if (rt.disposed) return;
       const id = rt.src.id;
       this.detach(id);
       let node;

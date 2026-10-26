@@ -8,7 +8,7 @@ Composez vos scènes à partir de plusieurs sources (écran, webcam, images, vid
 - **Scènes** : création, renommage (double-clic), suppression, réorganisation, transitions *Fondu* ou *Coupure* avec durée réglable.
 - **Mode studio** : aperçu et programme côte à côte, bouton *Transition* pour passer l'aperçu à l'antenne (double-clic sur une scène = à l'antenne).
 - **Sources** :
-  - Capture d'écran / de fenêtre (sélecteur avec miniatures)
+  - Capture d'écran / de fenêtre (sélecteur avec miniatures), **avec le son de la fenêtre capturée** sous Windows 10 (2004) ou plus récent : seul le son de l'application est pris, pas celui de Discord ou de la musique à côté. Pour un écran, c'est le son de tout le PC sauf MyStream (pas d'écho du retour casque).
   - Périphérique de capture vidéo (webcam, carte d'acquisition) avec choix de résolution et de FPS
   - Capture d'entrée audio (micro) et audio du bureau (Windows)
   - Image, source média (vidéo/audio, lecture en boucle)
@@ -88,6 +88,7 @@ npm install      # installe Electron, electron-builder et FFmpeg
 npm start        # lance l'application
 npm run check    # vérifie la syntaxe des sources
 npm run dist     # génère les installateurs pour le système courant dans dist/
+npm run build:native  # compile native/window-audio.cpp (Visual Studio sous Windows, MinGW sous Linux)
 ```
 
 ### Architecture
@@ -99,6 +100,7 @@ src/
 │   ├── restream.js    # client Restream : adresse d'ingestion, état des relais, chat (SSE)
 │   ├── browserSources.js # sources Navigateur rendues hors écran
 │   ├── encoders.js    # détection des encodeurs matériels
+│   ├── windowAudio.js # son d'une fenêtre (Windows) via native/window-audio.exe
 │   └── preload.js     # pont sécurisé (contextBridge) entre l'interface et le processus principal
 ├── renderer/
 │   ├── index.html, styles.css
