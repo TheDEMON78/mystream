@@ -11,6 +11,7 @@ const encoders = require('./encoders');
 const updater = require('./updater');
 const logger = require('./logger');
 const windowAudio = require('./windowAudio');
+const kickChat = require('./kickChat');
 
 // Les sources média doivent pouvoir jouer du son sans interaction préalable.
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
@@ -433,6 +434,7 @@ ipcMain.on('browser:create', (_e, id, opts) => browserSources.create(id, opts, s
 ipcMain.on('browser:destroy', (_e, id) => browserSources.destroy(id));
 ipcMain.on('browser:reload', (_e, id) => browserSources.reload(id));
 ipcMain.on('browser:ack', (_e, id) => browserSources.ack(id));
+kickChat.init(ipcMain, send);
 ipcMain.on('winaudio:start', (_e, id, captureId) => windowAudio.start(id, captureId, send));
 ipcMain.on('winaudio:stop', (_e, id) => windowAudio.stop(id));
 
@@ -498,6 +500,7 @@ function createWindow() {
     win = null;
     browserSources.destroyAll();
     windowAudio.stopAll();
+    kickChat.stop();
     restreamChat.stop();
   });
 }

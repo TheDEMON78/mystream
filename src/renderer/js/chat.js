@@ -196,6 +196,8 @@
       this.providers = [];
       this.status = {};
       window.api.restreamChat(c.mode === 'restream', st.restream);
+      // Kick en direct : page de chat officielle « popout » lue en arrière-plan.
+      window.api.kickChat(c.mode === 'direct' ? c.kickChannel : null);
       this.badgeMap = null;
       if (c.mode === 'direct' && c.twitchChannel.trim()) {
         this.providers.push(new TwitchIrc(c.twitchChannel, (m) => this.push(m), (s, e) => this.setStatus('twitch', s, e)));

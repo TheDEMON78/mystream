@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld('api', {
   restreamStatus: (cfg) => ipcRenderer.invoke('restream:status', cfg),
   restreamChat: (enabled, cfg) => ipcRenderer.send('restream:chat', enabled, cfg),
   twitchBadges: (channel) => ipcRenderer.invoke('twitch:badges', channel),
+  kickChat: (channel) => ipcRenderer.send('kickchat:set', channel || null),
   onChatMessage: listen('chat:message'),
   onChatStatus: listen('chat:status'),
   browserCreate: (id, opts) => ipcRenderer.send('browser:create', id, opts),

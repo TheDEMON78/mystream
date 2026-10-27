@@ -533,7 +533,7 @@
         el('span', { class: `chip ${st.status}`, title: st.error || '', text: `${p} : ${labels[st.status] || st.status}` })
       );
       const errors = entries.filter(([, st]) => st.status === 'error' && st.error).map(([p, st]) => el('div', { class: 'chat-error', text: `${p} : ${st.error}` }));
-      const hint = mode === 'direct' ? el('div', { class: 'chat-hint', text: 'Kick : passe par Restream (API officielle de Kick).' }) : null;
+      const hint = null;
       box.replaceChildren(...chips, ...errors, hint || '');
     },
 

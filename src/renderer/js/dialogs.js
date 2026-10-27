@@ -468,7 +468,7 @@
             options: [
               { value: 'off', label: 'Désactivé' },
               { value: 'restream', label: 'Restream (Twitch + Kick, avec badges)' },
-              { value: 'direct', label: 'Direct (Twitch uniquement, sans compte)' },
+              { value: 'direct', label: 'Direct (Twitch + Kick, sans compte)' },
             ],
           },
           {
@@ -477,9 +477,10 @@
             showIf: (v) => v.mode === 'restream',
           },
           { key: 'twitchChannel', type: 'text', label: 'Chaîne Twitch', placeholder: 'ex. m8_thedemon', showIf: (v) => v.mode === 'direct' },
+          { key: 'kickChannel', type: 'text', label: 'Chaîne Kick', placeholder: 'ex. m8_thedemon', showIf: (v) => v.mode === 'direct' },
           {
             type: 'info',
-            text: 'Le mode direct lit uniquement le chat Twitch. Kick n’offre pas de lecture publique fiable : utilise le mode Restream pour l’avoir.',
+            text: 'Kick : MyStream lit la page de chat officielle de ta chaîne (celle que Kick propose pour OBS), avec les vrais badges et emotes. Aucun compte nécessaire.',
             showIf: (v) => v.mode === 'direct',
           },
         ],
