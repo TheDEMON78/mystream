@@ -28,6 +28,7 @@ contextBridge.exposeInMainWorld('api', {
   kickChat: (channel) => ipcRenderer.send('kickchat:set', channel || null),
   onChatMessage: listen('chat:message'),
   onChatStatus: listen('chat:status'),
+  onChatModeration: listen('chat:moderation'),
   browserCreate: (id, opts) => ipcRenderer.send('browser:create', id, opts),
   browserDestroy: (id) => ipcRenderer.send('browser:destroy', id),
   browserReload: (id) => ipcRenderer.send('browser:reload', id),

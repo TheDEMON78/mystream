@@ -18,7 +18,7 @@ Composez vos scènes à partir de plusieurs sources (écran, webcam, images, vid
   - Réutilisation d'une source existante dans plusieurs scènes
 - **Aperçu interactif** : sélection, déplacement, redimensionnement à la souris (poignées, `Maj` pour déformer, `Alt` pour désactiver l'aimantation), flèches du clavier, `Suppr`, menu contextuel (ajuster/étirer/centrer à l'écran, taille d'origine, ordre, verrouillage).
 - **Filtres par source** : opacité, luminosité, contraste, saturation, teinte, recadrage, miroir et **incrustation fond vert** (calculée sur la carte graphique).
-- **Dock Chat** : chat Twitch + Kick en direct à côté de l'aperçu, avec badges et emotes. Via Restream (Twitch + Kick, API officielles) ou en lecture directe sans compte : Twitch par son chat public, Kick par sa page de chat officielle « popout » (celle que Kick propose pour OBS), lue en arrière-plan avec les vrais badges et emotes.
+- **Dock Chat** : chat Twitch + Kick en direct à côté de l'aperçu, avec badges et emotes. Via Restream (Twitch + Kick, API officielles) ou en lecture directe sans compte : Twitch par son chat public, Kick par sa page de chat officielle « popout » (celle que Kick propose pour OBS), lue en arrière-plan avec les vrais badges et emotes. En lecture directe, la modération est suivie : un message supprimé, les messages d'un viewer banni ou en timeout, ou un chat vidé disparaissent aussi du dock et de l'incrustation.
 - **Mises à jour automatiques** : MyStream vérifie les nouvelles releases au démarrage puis toutes les 4 h ; l'installateur Windows et l'AppImage Linux se mettent à jour tout seuls (installation à la fermeture). Les autres formats affichent un lien de téléchargement.
 - **Mixeur audio** : VU-mètres, faders, muet, écoute (monitoring) par source ; sources globales *Mic/Aux* et *Audio du bureau*.
 - **Streaming RTMP/RTMPS** : Twitch, YouTube, Kick, Facebook Live ou serveur personnalisé, débit affiché en direct.
@@ -109,7 +109,7 @@ src/
 │       ├── store.js       # modèle de données (scènes, sources, éléments, réglages)
 │       ├── sources.js     # types de sources et leurs moteurs (webcam, écran, image, texte…)
 │       ├── audio.js       # mixeur Web Audio et sources audio globales
-│       ├── chat.js        # chat : Restream, Twitch (IRC anonyme), Kick (Pusher)
+│       ├── chat.js        # chat : Restream, Twitch (IRC anonyme), Kick, modération (suppressions)
 │       ├── compositor.js  # rendu des scènes, cadence d'images, filtres, incrustation, mode studio
 │       ├── preview.js     # interactions de l'aperçu (sélection, déplacement, redimensionnement)
 │       ├── outputs.js     # enregistrement et streaming (MediaRecorder → FFmpeg)

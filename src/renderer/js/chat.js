@@ -91,10 +91,11 @@
 
   /* Twitch : lecture anonyme du chat IRC (aucun compte nécessaire) ------- */
   class TwitchIrc {
-    constructor(channel, onMessage, onStatus) {
+    constructor(channel, onMessage, onStatus, onModeration) {
       this.channel = channel.toLowerCase().replace(/^.*twitch\.tv\//, '').replace(/[^a-z0-9_]/g, '');
       this.onMessage = onMessage;
       this.onStatus = onStatus;
+      this.onModeration = onModeration;
       this.stopped = false;
       this.connect();
     }
@@ -156,7 +157,14 @@
         }
         // Un /me (ACTION) décale le texte : les positions d'emotes ne s'appliquent plus.
         const name = (tags['display-name'] || '').replace(/\\s/g, ' ') || m[1];
-        this.onMessage({ platform: 'twitch', username: name, color: tags.color || null, message: text, badges, emotes: action ? [] : emotes });
+        this.onMessage({ id: tags.id, userId: tags['user-id'], platform: 'twitch', username: name, color: tags.color || null, message: text, badges, emotes: action ? [] : emotes });
+      } else if (/^:tmi\.twitch\.tv CLEARMSG #/.test(rest)) {
+        // Message supprimé par un modérateur.
+        this.onModeration({ platform: 'twitch', action: 'delete', id: tags['target-msg-id'] });
+      } else if (/^:tmi\.twitch\.tv CLEARCHAT #/.test(rest)) {
+        // Viewer banni ou en timeout (ses messages disparaissent), sinon /clear.
+        const user = rest.match(/ CLEARCHAT #[^ ]+ :(.+)$/);
+        this.onModeration(user ? { platform: 'twitch', action: 'user', userId: tags['target-user-id'], username: user[1] } : { platform: 'twitch', action: 'clear' });
       } else if (/ ROOMSTATE #/.test(rest) || / JOIN #/.test(rest)) {
         this.onStatus('connected');
       }
@@ -181,6 +189,7 @@
     init() {
       window.api.onChatMessage((m) => this.push(m));
       window.api.onChatStatus((s) => this.setStatus(s.platform, s.status, s.error));
+      window.api.onChatModeration((a) => this.moderate(a));
       MS.on('settings:changed', () => this.apply());
       this.apply();
     },
@@ -200,7 +209,7 @@
       window.api.kickChat(c.mode === 'direct' ? c.kickChannel : null);
       this.badgeMap = null;
       if (c.mode === 'direct' && c.twitchChannel.trim()) {
-        this.providers.push(new TwitchIrc(c.twitchChannel, (m) => this.push(m), (s, e) => this.setStatus('twitch', s, e)));
+        this.providers.push(new TwitchIrc(c.twitchChannel, (m) => this.push(m), (s, e) => this.setStatus('twitch', s, e), (a) => this.moderate(a)));
         window.api.twitchBadges(c.twitchChannel).then((map) => {
           this.badgeMap = map;
           this.messages.forEach((m) => this.resolveBadges(m));
@@ -216,6 +225,8 @@
     },
 
     push(m) {
+      // Restream peut relayer les actions de modération dans le même flux.
+      if (m.moderation) return this.moderate({ platform: m.platform, ...m.moderation });
       // Restream rejoue un court historique à chaque (re)connexion : on
       // ignore ce qui a déjà été affiché pour éviter les doublons.
       if (m.historical) {
@@ -233,6 +244,27 @@
       this.messages.push(m);
       if (this.messages.length > MAX_MESSAGES) this.messages.shift();
       MS.emit('chat:message', m);
+    },
+
+    /**
+     * Retire du chat (dock et incrustation) ce que la plateforme a supprimé :
+     * un message (`delete`), tous ceux d'un viewer banni ou en timeout
+     * (`user`), ou tout le chat de la plateforme (`clear`).
+     */
+    moderate(a) {
+      if (!a || !a.platform) return;
+      const name = String(a.username || '').toLowerCase();
+      const hit = (m) => {
+        if (m.platform !== a.platform || m.system || m.divider) return false;
+        if (a.action === 'clear') return true;
+        if (a.action === 'delete') return !!a.id && m.id === a.id;
+        if (a.action === 'user') return (a.userId != null && m.userId != null && String(m.userId) === String(a.userId)) || (!!name && String(m.username || '').toLowerCase() === name);
+        return false;
+      };
+      const kept = this.messages.filter((m) => !hit(m));
+      if (kept.length === this.messages.length) return;
+      this.messages = kept;
+      MS.emit('chat:cleared');
     },
 
     /** Images des badges Twitch en lecture directe (Restream fournit déjà les siennes). */

@@ -96,6 +96,10 @@ function init(ipcMain, send) {
     }
     send('chat:message', msg);
   });
+  ipcMain.on('kickchat:moderation', (e, action) => {
+    if (!win || e.sender !== win.webContents) return;
+    send('chat:moderation', { ...action, platform: 'kick' });
+  });
   ipcMain.on('kickchat:status', (e, status) => {
     if (!win || e.sender !== win.webContents) return;
     send('chat:status', { platform: 'kick', status, error: status === 'connecting' ? 'reconnexion…' : null });

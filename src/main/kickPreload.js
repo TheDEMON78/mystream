@@ -12,7 +12,7 @@ webFrame.executeJavaScript(`(() => {
     const ws = protocols === undefined ? new Native(url) : new Native(url, protocols);
     window.postMessage({ __mystream: 'open' }, '*');
     ws.addEventListener('message', (e) => {
-      if (typeof e.data === 'string' && e.data.includes('ChatMessageEvent')) window.postMessage({ __mystream: 'frame', data: e.data }, '*');
+      if (typeof e.data === 'string' && /ChatMessageEvent|MessageDeletedEvent|UserBannedEvent|ChatroomClearEvent/.test(e.data)) window.postMessage({ __mystream: 'frame', data: e.data }, '*');
     });
     ws.addEventListener('close', () => window.postMessage({ __mystream: 'close' }, '*'));
     return ws;
@@ -39,6 +39,7 @@ function toMessage(raw) {
   const badges = [...v1, ...v2];
   return {
     id: raw.id,
+    userId: sender.id,
     platform: 'kick',
     username: sender.username || 'inconnu',
     color: identity.color || null,
@@ -60,9 +61,15 @@ window.addEventListener('message', (e) => {
     try {
       const frame = JSON.parse(line);
       const pub = frame.push && frame.push.pub && frame.push.pub.data;
-      if (!pub || pub.event !== 'App\\Events\\ChatMessageEvent') continue;
+      if (!pub) continue;
       const raw = typeof pub.data === 'string' ? JSON.parse(pub.data) : pub.data;
-      if (raw && raw.type !== 'reply-deleted') ipcRenderer.send('kickchat:message', toMessage(raw));
+      if (!raw) continue;
+      const event = String(pub.event).replace(/^App\\Events\\/, '');
+      if (event === 'ChatMessageEvent' && raw.type !== 'reply-deleted') ipcRenderer.send('kickchat:message', toMessage(raw));
+      // Modération : message supprimé, viewer banni ou en timeout, chat vidé.
+      else if (event === 'MessageDeletedEvent') ipcRenderer.send('kickchat:moderation', { action: 'delete', id: (raw.message && raw.message.id) || raw.message_id });
+      else if (event === 'UserBannedEvent' && raw.user) ipcRenderer.send('kickchat:moderation', { action: 'user', userId: raw.user.id, username: raw.user.username });
+      else if (event === 'ChatroomClearEvent') ipcRenderer.send('kickchat:moderation', { action: 'clear' });
     } catch {
       /* trame d'un autre type */
     }
