@@ -167,13 +167,19 @@
         const css = s.css && s.css.trim() !== OBS_DEFAULT_CSS ? `${MS.appInfo.defaultBrowserCss}\n${s.css}` : MS.appInfo.defaultBrowserCss;
         return mk('browser', { url: url || '', width: Number(s.width) || 800, height: Number(s.height) || 600, fps: s.fps_custom ? Number(s.fps) || 30 : 30, css });
       }
-      case 'window_capture':
-      case 'game_capture': {
+      case 'game_capture':
+        // Mode « n'importe quelle application en plein écran » : même principe que la Capture de jeu de MyStream.
+        if (s.capture_mode !== 'window') {
+          notes.push({ level: 'info', text: `« ${obs.name} » : capture de jeu automatique (le jeu en plein écran ou fenêtré sans bordure est capturé tout seul).` });
+          return mk('game_capture', { captureAudio: s.capture_audio !== false });
+        }
+      // falls through : capture de jeu d'une fenêtre précise
+      case 'window_capture': {
         const w = parseWindow(s.window);
         const game = obs.id === 'game_capture';
         if (!w.title && !w.exe) {
-          notes.push({ level: 'todo', text: `« ${obs.name} » : ${game ? 'capture de jeu « plein écran »' : 'capture de fenêtre'} sans fenêtre mémorisée, convertie en capture d'écran.` });
-          return mk('display_capture', { captureKind: 'screen', captureAudio: Boolean(s.capture_audio) });
+          notes.push({ level: 'todo', text: `« ${obs.name} » : capture de fenêtre sans fenêtre mémorisée, convertie en capture de jeu automatique.` });
+          return mk('game_capture', { captureAudio: Boolean(s.capture_audio) });
         }
         if (game) notes.push({ level: 'info', text: `« ${obs.name} » : capture de jeu convertie en capture de la fenêtre « ${w.title || w.exe} ». Elle démarre dès que le jeu est lancé. Si l'image reste noire, passe le jeu en plein écran fenêtré (sans bordure).` });
         return mk('display_capture', { captureKind: 'window', captureName: w.title, captureAudio: Boolean(s.capture_audio), windowMatch: { title: w.title, exe: w.exe } });

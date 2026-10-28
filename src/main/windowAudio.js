@@ -69,8 +69,54 @@ function stop(id) {
   }
 }
 
-function stopAll() {
-  for (const id of [...captures.keys()]) stop(id);
+/* Jeu en plein écran au premier plan (source « Capture de jeu ») --------- */
+
+const gameWatch = { proc: null, users: new Set(), current: null, send: null };
+
+/** Démarre la surveillance tant qu'au moins une source « Capture de jeu » existe. */
+function watchGames(id, on, send) {
+  gameWatch.send = send;
+  if (on) gameWatch.users.add(id);
+  else gameWatch.users.delete(id);
+  if (gameWatch.users.size && !gameWatch.proc && available()) {
+    const proc = spawn(helperPath(), [`games:${process.pid}`], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    gameWatch.proc = proc;
+    let rest = '';
+    proc.stdout.setEncoding('utf8');
+    proc.stdout.on('data', (chunk) => {
+      const lines = (rest + chunk).split('\n');
+      rest = lines.pop();
+      for (const line of lines) {
+        const m = /^game (\d+) (\d+)\t([^\t]*)\t(.*)$/.exec(line.trim());
+        gameWatch.current = m ? { id: `window:${m[1]}:0`, pid: Number(m[2]), exe: m[3], title: m[4] } : null;
+        logger.info('Capture de jeu :', gameWatch.current ? `${gameWatch.current.exe} (${gameWatch.current.title})` : 'aucun jeu en plein écran');
+        gameWatch.send('game:changed', gameWatch.current);
+      }
+    });
+    proc.on('close', () => {
+      if (gameWatch.proc !== proc) return;
+      gameWatch.proc = null;
+      gameWatch.current = null;
+      gameWatch.send('game:changed', null);
+    });
+    proc.on('error', (e) => logger.error('Surveillance des jeux :', e.message));
+  } else if (!gameWatch.users.size && gameWatch.proc) {
+    const proc = gameWatch.proc;
+    gameWatch.proc = null;
+    gameWatch.current = null;
+    try {
+      proc.stdin.end();
+      proc.kill();
+    } catch {
+      /* déjà arrêté */
+    }
+  }
 }
 
-module.exports = { start, stop, stopAll, available };
+function stopAll() {
+  for (const id of [...captures.keys()]) stop(id);
+  gameWatch.users.clear();
+  watchGames(null, false, gameWatch.send);
+}
+
+module.exports = { start, stop, stopAll, available, watchGames, currentGame: () => gameWatch.current };

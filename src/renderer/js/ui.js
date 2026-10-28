@@ -211,7 +211,7 @@
               },
             },
             el('span', { class: 'glyph', text: type.glyph || '•' }),
-            el('span', { class: 'name', text: src.name }),
+            el('span', { class: 'name', text: src.name, title: rt && rt.status ? `${src.name} · ${rt.status}` : src.name }, rt && rt.status ? el('small', { class: 'src-status', text: rt.status }) : null),
             rt && rt.error ? el('span', { class: 'warn', title: rt.error }, MS.icon('warning')) : null,
             toggle('visible', 'eye', 'eyeOff', 'Afficher / masquer'),
             el(
@@ -235,7 +235,7 @@
       const r = anchor.getBoundingClientRect();
       const platform = MS.appInfo.platform;
       const entries = Object.entries(MS.SourceTypes)
-        .filter(([key]) => (key !== 'desktop_audio' && key !== 'app_audio') || platform === 'win32')
+        .filter(([key]) => !['desktop_audio', 'app_audio', 'game_capture'].includes(key) || platform === 'win32')
         .map(([key, t]) => ({ label: `${t.glyph}  ${t.label}`, action: () => this.createSource(key) }));
       const scene = store().editScene();
       const existing = Object.values(store().data.sources).filter((s) => !s.global && !scene.items.some((it) => it.sourceId === s.id));

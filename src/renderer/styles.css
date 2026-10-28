@@ -1374,3 +1374,10 @@ table.history tbody tr:hover {
 .import-notes li::marker {
   color: var(--accent);
 }
+
+/* État d'une source (ex. jeu capturé) dans la liste des sources */
+.src-status {
+  margin-left: 6px;
+  color: var(--muted);
+  font-size: 11px;
+}

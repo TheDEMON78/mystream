@@ -222,6 +222,99 @@
   }
 
   /**
+   * Capture de jeu automatique, comme OBS en mode « n'importe quelle
+   * application en plein écran » : aucun choix à faire, MyStream capture le
+   * jeu ou l'application qui occupe tout l'écran (plein écran ou fenêtré sans
+   * bordure), avec son son. Le jeu reste capturé pendant un alt-tab, jusqu'à
+   * ce qu'il se ferme ou qu'une autre application passe en plein écran.
+   */
+  class GameCaptureRuntime extends BaseRuntime {
+    async start() {
+      if (!MS.appInfo.windowAudio) return this.fail(new Error('Disponible sous Windows 10 (2004) ou plus récent'));
+      this.onGame = (g) => this.setGame(g);
+      MS.on('game:changed', this.onGame);
+      window.api.gameWatch(this.src.id, true);
+      this.markReady();
+      this.setGame(await window.api.gameCurrent());
+    }
+    get width() {
+      return this.video ? this.video.videoWidth : 0;
+    }
+    get height() {
+      return this.video ? this.video.videoHeight : 0;
+    }
+    drawable() {
+      return this.video && this.video.readyState >= 2 ? this.video : null;
+    }
+    /** Nom du jeu capturé (affiché dans la liste des sources). */
+    get status() {
+      return this.game ? `${this.game.title || this.game.exe}` : 'En attente d’un jeu en plein écran';
+    }
+    async setGame(g) {
+      if (this.disposed || (g && g.id) === (this.game && this.game.id)) return;
+      this.game = g || null;
+      const token = (this.token = (this.token || 0) + 1);
+      this.stopVideo();
+      this.syncAudio();
+      MS.emit('runtime:ready', this);
+      if (!g) return;
+      const { width, height, fps } = MS.store.settings.video;
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: { mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: g.id, maxWidth: width, maxHeight: height, maxFrameRate: fps } },
+        });
+        if (token !== this.token || this.disposed) return stream.getTracks().forEach((t) => t.stop());
+        const v = document.createElement('video');
+        v.muted = true;
+        v.playsInline = true;
+        v.srcObject = stream;
+        await v.play().catch(() => {});
+        this.stream = stream;
+        this.video = v;
+        this.error = null;
+        MS.emit('runtime:ready', this);
+      } catch (e) {
+        if (token === this.token) this.fail(new Error(`Capture de « ${g.title || g.exe} » impossible : ${e.message}`));
+      }
+    }
+    stopVideo() {
+      if (this.stream) this.stream.getTracks().forEach((t) => t.stop());
+      if (this.video) this.video.srcObject = null;
+      this.stream = null;
+      this.video = null;
+    }
+    hasAudio() {
+      return Boolean(this.src.settings.captureAudio && MS.appInfo.windowAudio);
+    }
+    /** Le lecteur reste en place ; seule la capture du son suit le jeu. */
+    audioNode(ctx) {
+      if (!this.pcm) this.pcm = new AudioWorkletNode(ctx, 'pcm-player', { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [2] });
+      this.syncAudio();
+      return this.pcm;
+    }
+    syncAudio() {
+      if (!this.pcm) return;
+      if (this.game && this.hasAudio()) window.api.winAudioStart(this.src.id, this.game.id);
+      else window.api.winAudioStop(this.src.id);
+    }
+    pushAudio(bytes) {
+      pushPcm(this, bytes);
+    }
+    /** Le jeu qui se ferme coupe son son : ce n'est pas une erreur à signaler. */
+    onAudioError() {
+      return true;
+    }
+    dispose() {
+      super.dispose();
+      if (this.onGame) MS.off('game:changed', this.onGame);
+      window.api.gameWatch(this.src.id, false);
+      this.stopVideo();
+      if (this.pcm) window.api.winAudioStop(this.src.id);
+    }
+  }
+
+  /**
    * Son d'une application seule (Discord, navigateur, lecteur de musique…),
    * sans image : l'équivalent de « Capture audio d'application » d'OBS.
    */
@@ -681,13 +774,14 @@
       window.api.browserAck(f.id);
     }
   });
+  window.api.onGameChanged((g) => MS.emit('game:changed', g));
   window.api.onWinAudioData(({ id, data }) => {
     const rt = MS.runtimes.get(id);
     if (rt && rt.pushAudio) rt.pushAudio(data);
   });
   window.api.onWinAudioError(({ id, error }) => {
     const rt = MS.runtimes.get(id);
-    if (!rt) return;
+    if (!rt || (rt.onAudioError && rt.onAudioError(error))) return;
     MS.toast(`Son de « ${rt.src.name} » : ${error}`, 'error', 8000);
   });
 
@@ -722,6 +816,16 @@
   /* Types de sources --------------------------------------------------- */
 
   MS.SourceTypes = {
+    game_capture: {
+      label: 'Capture de jeu (automatique)',
+      glyph: '🎮',
+      defaults: () => ({ captureAudio: true }),
+      create: (src) => new GameCaptureRuntime(src),
+      fields: () => [
+        { type: 'info', text: "Rien à choisir : MyStream capture tout seul le jeu ou l'application en plein écran ou en fenêtré sans bordure, avec son son. Lance ton jeu, il apparaît. Il reste capturé pendant un alt-tab, jusqu'à ce qu'il se ferme ou qu'une autre application passe en plein écran." },
+        { key: 'captureAudio', type: 'checkbox', label: 'Capturer le son du jeu' },
+      ],
+    },
     display_capture: {
       label: "Capture d'écran / fenêtre",
       glyph: '🖥',

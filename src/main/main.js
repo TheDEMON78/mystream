@@ -461,6 +461,8 @@ ipcMain.on('browser:ack', (_e, id) => browserSources.ack(id));
 kickChat.init(ipcMain, send);
 ipcMain.on('winaudio:start', (_e, id, captureId) => windowAudio.start(id, captureId, send));
 ipcMain.on('winaudio:stop', (_e, id) => windowAudio.stop(id));
+ipcMain.on('game:watch', (_e, id, on) => windowAudio.watchGames(id, on, send));
+ipcMain.handle('game:current', () => windowAudio.currentGame());
 
 ipcMain.handle('update:check', () => updater.check());
 ipcMain.handle('update:state', () => updater.getState());
