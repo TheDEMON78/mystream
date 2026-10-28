@@ -27,7 +27,7 @@
         chat: { mode: 'off', twitchChannel: '', kickChannel: '', kickChatroomId: '' },
         ui: {
           studio: false,
-          docks: { scenes: true, sources: true, mixer: true, transitions: true, controls: true, chat: true },
+          docks: { scenes: true, sources: true, mixer: true, transitions: true, controls: true, chat: true, liveinfo: true },
           liveBar: true,
           layout: null, // disposition des docks (null = disposition d'origine)
           layouts: {}, // dispositions enregistrées par nom

@@ -61,6 +61,14 @@
           <div id="chat-status"></div>
           <div id="chat-list"></div>
         </aside>
+        <aside class="dock" id="dock-liveinfo">
+          <div class="dock-title">
+            Titre et catégorie
+            <span class="spacer"></span>
+            <button class="tool" id="liveinfo-refresh" title="Actualiser depuis Twitch et Kick">⟳</button>
+          </div>
+          <div class="dock-body" id="liveinfo-body"></div>
+        </aside>
         </div>
       </main>
 
@@ -122,7 +130,6 @@
             <button id="btn-stream" class="btn big" data-act="stream">Démarrer le streaming</button>
             <button id="btn-record" class="btn big" data-act="record">Démarrer l'enregistrement</button>
             <button id="btn-studio" class="btn big" data-act="studio">Mode studio</button>
-            <button class="btn big" data-act="live-info">Titre et catégorie…</button>
             <button class="btn big" data-act="folder">Dossier des enregistrements</button>
             <button class="btn big" data-act="settings">Paramètres</button>
             <button class="btn big" data-act="quit">Quitter</button>

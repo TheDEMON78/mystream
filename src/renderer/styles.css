@@ -1260,7 +1260,8 @@ table.history tbody tr:hover {
   cursor: pointer;
 }
 .chip-fill {
-  max-width: 380px;
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   padding: 3px 4px 3px 10px;
   text-overflow: ellipsis;
@@ -1303,6 +1304,50 @@ table.history tbody tr:hover {
 }
 .live-feedback.error {
   color: var(--danger);
+}
+/* Dock « Titre et catégorie » */
+#liveinfo-body {
+  flex: 1;
+  min-height: 0;
+}
+#dock-liveinfo .dock-title {
+  display: flex;
+  align-items: center;
+  padding-top: 3px;
+  padding-bottom: 3px;
+}
+#dock-liveinfo .spacer {
+  flex: 1;
+}
+#dock-liveinfo .live-platforms {
+  margin-bottom: 8px;
+}
+#dock-liveinfo .field {
+  margin-bottom: 8px;
+}
+.row-actions.end {
+  justify-content: flex-end;
+  margin: 2px 0 6px;
+}
+.row-actions.end .btn {
+  padding: 4px 12px;
+}
+.liveinfo-notice .btn.small {
+  margin-top: 4px;
+}
+.error-text {
+  color: var(--danger);
+}
+.dock.flash {
+  animation: dock-flash 0.9s ease-out;
+}
+@keyframes dock-flash {
+  0% {
+    box-shadow: 0 0 0 2px var(--accent);
+  }
+  100% {
+    box-shadow: 0 0 0 2px transparent;
+  }
 }
 #transition-summary {
   margin: 6px 0 0;

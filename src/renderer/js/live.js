@@ -132,6 +132,7 @@
 
     init() {
       this.buildBar();
+      liveDock.init();
       MS.on('outputs:changed', () => this.sync());
       MS.on('chat:message', (m) => this.session && this.session.countMessage(m));
       MS.on('settings:changed', () => this.render());
@@ -170,6 +171,7 @@
       this.info = r.data;
       this.session.setViewers(r.data);
       this.render();
+      MS.emit('liveinfo:changed');
     },
 
     tick() {
@@ -360,40 +362,124 @@
     },
   };
 
-  /* Titre et catégorie du live (via Restream) ---------------------------- */
-  MS.openLiveInfo = async function () {
-    const st = MS.store.settings;
-    if (!String(st.restream.url || '').trim()) {
-      MS.toast("Le titre et la catégorie passent par Restream, qui a tes comptes Twitch et Kick : renseigne son adresse d'abord.", 'info', 8000);
-      MS.openSettings('restream');
-      return;
-    }
-    const r = await window.api.restreamLive(st.restream);
-    if (!r.ok) {
-      MS.toast(`Restream injoignable : ${r.error}`, 'error', 8000);
-      return;
-    }
-    const info = r.data;
-    live.info = info;
-    const connected = PLATFORMS.filter((p) => info[p] && info[p].connected);
-    const saved = st.liveInfo.titles;
-    const current = (connected[0] && info[connected[0]]) || {};
+  /* Dock « Titre et catégorie » (via Restream) ----------------------------- */
+  const liveDock = {
+    current: {}, // titre et catégorie actuels sur la plateforme de référence
+    chosen: null, // catégorie choisie dans la liste : { name, twitchId, kickId }
+    titleDirty: false, // le titre a été modifié à la main : on ne l'écrase plus
+    categoryDirty: false,
 
-    const title = el('input', { class: 'input', type: 'text', maxlength: 140, value: current.title || '' });
-    const category = el('input', { class: 'input', type: 'text', value: current.category || '', placeholder: 'Rechercher (3 lettres minimum)' });
-    const suggestions = el('div', { class: 'cat-list' });
-    const feedback = el('div', { class: 'live-feedback' });
-    const titles = el('div', { class: 'title-chips' });
-    let chosen = null; // catégorie choisie dans la liste : { name, twitchId, kickId }
-    let searchTimer = null;
+    init() {
+      const body = MS.$('#liveinfo-body');
+      this.title = el('input', { id: 'liveinfo-title', class: 'input', type: 'text', maxlength: 140, placeholder: 'Titre du live', oninput: () => (this.titleDirty = true) });
+      this.category = el('input', { id: 'liveinfo-category', class: 'input', type: 'text', placeholder: 'Rechercher (3 lettres minimum)' });
+      this.suggestions = el('div', { class: 'cat-list' });
+      this.feedback = el('div', { class: 'live-feedback' });
+      this.titles = el('div', { class: 'title-chips' });
+      this.status = el('div', { class: 'live-platforms' });
+      this.notice = el('div', { class: 'liveinfo-notice', hidden: true });
+      this.form = el(
+        'div',
+        { class: 'liveinfo-form' },
+        el('label', { class: 'field' }, el('span', { text: 'Titre' }), this.title),
+        el('div', { class: 'row-actions' }, el('button', { class: 'btn small', text: '☆ Enregistrer ce titre', onclick: () => this.saveTitle() })),
+        this.titles,
+        el('label', { class: 'field' }, el('span', { text: 'Catégorie' }), this.category),
+        this.suggestions,
+        el('div', { class: 'row-actions end' }, el('button', { class: 'btn', text: 'Annuler', title: 'Revenir au titre et à la catégorie actuels', onclick: () => this.reset() }), el('button', { class: 'btn primary', text: 'Mettre à jour', onclick: () => this.apply() })),
+        this.feedback
+      );
+      body.replaceChildren(this.status, this.notice, this.form);
 
-    const renderTitles = () => {
-      titles.replaceChildren(
+      this.category.addEventListener('input', () => this.search());
+      for (const input of [this.title, this.category]) {
+        input.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            this.apply();
+          }
+        });
+      }
+      MS.$('#liveinfo-refresh').addEventListener('click', () => this.refresh(true));
+      MS.on('liveinfo:changed', () => this.renderInfo());
+      MS.on('settings:changed', () => this.refresh());
+      this.renderTitles();
+      this.refresh();
+      // Hors live, on relit de temps en temps (titre changé depuis le site de Twitch ou de Kick…).
+      setInterval(() => !live.session && this.refresh(), 120000);
+    },
+
+    configured() {
+      return Boolean(String(MS.store.settings.restream.url || '').trim());
+    },
+
+    async refresh(manual = false) {
+      if (!this.configured()) {
+        live.info = null;
+        this.renderInfo();
+        return;
+      }
+      if (manual) this.setFeedback('Actualisation…');
+      const r = await window.api.restreamLive(MS.store.settings.restream);
+      // Les deux plateformes en erreur : c'est Restream lui-même qui ne répond pas.
+      const down = r.ok && PLATFORMS.every((p) => r.data[p] && r.data[p].error);
+      this.error = !r.ok ? r.error : down ? r.data.twitch.error : null;
+      if (r.ok) live.info = r.data;
+      if (manual) this.setFeedback('');
+      this.renderInfo();
+    },
+
+    renderInfo() {
+      const info = live.info;
+      const ok = this.configured() && info && !this.error;
+      this.form.hidden = !ok;
+      this.status.hidden = !ok;
+      this.notice.hidden = ok;
+      if (!this.configured()) {
+        this.notice.replaceChildren(
+          el('p', { class: 'hint', text: 'Le titre et la catégorie passent par Restream, qui a tes comptes Twitch et Kick.' }),
+          el('button', { class: 'btn small', text: 'Configurer Restream…', onclick: () => MS.openSettings('restream') })
+        );
+        return;
+      }
+      if (!ok) {
+        this.notice.replaceChildren(el('p', { class: 'hint error-text', text: `Restream injoignable : ${this.error || 'pas de réponse'}` }), el('button', { class: 'btn small', text: 'Réessayer', onclick: () => this.refresh(true) }));
+        return;
+      }
+      const connected = PLATFORMS.filter((p) => info[p] && info[p].connected);
+      this.status.replaceChildren(
+        ...PLATFORMS.map((p) => {
+          const i = info[p] || {};
+          const label = i.connected ? (typeof i.viewerCount === 'number' ? `${fmtInt(i.viewerCount)} spectateurs` : 'hors ligne') : i.error ? 'injoignable' : 'non connecté';
+          return el('span', { class: `live-pf ${i.connected ? 'on' : ''}`, title: i.connected ? '' : "Connecte ce compte dans l'interface de Restream" }, platformIcon(p), el('span', { text: label }));
+        })
+      );
+      if (!connected.length) {
+        this.notice.hidden = false;
+        this.notice.replaceChildren(el('p', { class: 'hint', text: "Aucun compte connecté : connecte Twitch et/ou Kick dans l'interface de Restream." }));
+      }
+      this.current = (connected[0] && info[connected[0]]) || {};
+      // Ne pas écraser ce que l'utilisateur est en train de taper.
+      if (!this.titleDirty && document.activeElement !== this.title) this.title.value = this.current.title || '';
+      if (!this.categoryDirty && document.activeElement !== this.category) this.category.value = this.current.category || '';
+    },
+
+    renderTitles() {
+      const saved = MS.store.settings.liveInfo.titles;
+      this.titles.replaceChildren(
         ...saved.map((t, i) =>
           el(
             'span',
             { class: 'title-chip' },
-            el('button', { class: 'chip-fill', text: t, title: 'Utiliser ce titre', onclick: () => (title.value = t) }),
+            el('button', {
+              class: 'chip-fill',
+              text: t,
+              title: 'Utiliser ce titre',
+              onclick: () => {
+                this.title.value = t;
+                this.titleDirty = true;
+              },
+            }),
             el('button', {
               class: 'chip-del',
               text: '×',
@@ -401,32 +487,43 @@
               onclick: () => {
                 saved.splice(i, 1);
                 MS.store.save();
-                renderTitles();
+                this.renderTitles();
               },
             })
           )
         )
       );
-      titles.hidden = !saved.length;
-    };
-    renderTitles();
+      this.titles.hidden = !saved.length;
+    },
 
-    category.addEventListener('input', () => {
-      chosen = null;
-      clearTimeout(searchTimer);
-      const q = category.value.trim();
+    saveTitle() {
+      const saved = MS.store.settings.liveInfo.titles;
+      const t = this.title.value.trim();
+      if (!t || saved.includes(t)) return;
+      saved.unshift(t);
+      saved.splice(20);
+      MS.store.save();
+      this.renderTitles();
+    },
+
+    search() {
+      this.chosen = null;
+      this.categoryDirty = true;
+      clearTimeout(this.searchTimer);
+      const q = this.category.value.trim();
       if (q.length < 3) {
-        suggestions.replaceChildren();
+        this.suggestions.replaceChildren();
         return;
       }
-      searchTimer = setTimeout(async () => {
-        const res = await window.api.restreamCategories(st.restream, q);
-        if (category.value.trim() !== q) return;
+      this.searchTimer = setTimeout(async () => {
+        const res = await window.api.restreamCategories(MS.store.settings.restream, q);
+        if (this.category.value.trim() !== q) return;
         if (!res.ok) {
-          suggestions.replaceChildren(el('div', { class: 'hint', text: res.error }));
+          this.suggestions.replaceChildren(el('div', { class: 'hint', text: res.error }));
           return;
         }
-        suggestions.replaceChildren(
+        const both = live.info && PLATFORMS.every((p) => live.info[p] && live.info[p].connected);
+        this.suggestions.replaceChildren(
           ...(res.data.length
             ? res.data.slice(0, 8).map((c) =>
                 el(
@@ -434,114 +531,85 @@
                   {
                     class: 'cat-item',
                     onclick: () => {
-                      chosen = c;
-                      category.value = c.name;
-                      suggestions.replaceChildren();
+                      this.chosen = c;
+                      this.category.value = c.name;
+                      this.suggestions.replaceChildren();
                     },
                   },
                   el('span', { text: c.name }),
                   el('span', { class: 'cat-pf' }, c.twitchId ? platformIcon('twitch') : null, c.kickId ? platformIcon('kick') : null)
                 )
               )
-            : [el('div', { class: 'hint', text: connected.length > 1 ? 'Aucune catégorie portant exactement ce nom sur Twitch et sur Kick.' : 'Aucune catégorie trouvée.' })])
+            : [el('div', { class: 'hint', text: both ? 'Aucune catégorie portant exactement ce nom sur Twitch et sur Kick.' : 'Aucune catégorie trouvée.' })])
         );
       }, 350);
-    });
+    },
 
-    const status = el(
-      'div',
-      { class: 'live-platforms' },
-      PLATFORMS.map((p) => {
-        const i = info[p] || {};
-        const label = i.connected ? `connecté${typeof i.viewerCount === 'number' ? ` · ${fmtInt(i.viewerCount)} spectateurs` : ''}` : i.error ? 'injoignable' : 'non connecté dans Restream';
-        return el('span', { class: `live-pf ${i.connected ? 'on' : ''}` }, platformIcon(p), el('span', { text: `${p === 'twitch' ? 'Twitch' : 'Kick'} : ${label}` }));
-      })
-    );
+    reset() {
+      this.titleDirty = false;
+      this.categoryDirty = false;
+      this.chosen = null;
+      this.suggestions.replaceChildren();
+      this.setFeedback('');
+      this.title.blur();
+      this.category.blur();
+      this.renderInfo();
+    },
 
-    const content = el(
-      'div',
-      { class: 'live-info' },
-      status,
-      el('label', { class: 'field' }, el('span', { text: 'Titre' }), title),
-      el(
-        'div',
-        { class: 'row-actions' },
-        el('button', {
-          class: 'btn small',
-          text: '☆ Enregistrer ce titre',
-          onclick: () => {
-            const t = title.value.trim();
-            if (!t || saved.includes(t)) return;
-            saved.unshift(t);
-            saved.splice(20);
-            MS.store.save();
-            renderTitles();
-          },
-        })
-      ),
-      titles,
-      el('label', { class: 'field' }, el('span', { text: 'Catégorie' }), category),
-      suggestions,
-      connected.length ? null : el('p', { class: 'hint', text: "Aucun compte connecté : connecte Twitch et/ou Kick dans l'interface de Restream." }),
-      feedback
-    );
+    setFeedback(text, error = false) {
+      this.feedback.className = `live-feedback ${error ? 'error' : ''}`;
+      this.feedback.textContent = text;
+    },
 
-    let closeModal = null;
-    const apply = async () => {
-      const t = title.value.trim();
-      const changedCat = category.value.trim() && category.value.trim() !== (current.category || '');
-      if (changedCat && !chosen) {
-        feedback.className = 'live-feedback error';
-        feedback.textContent = 'Choisis la catégorie dans la liste proposée.';
-        return;
-      }
-      if (!t && !chosen) return;
-      feedback.className = 'live-feedback';
-      feedback.textContent = 'Mise à jour…';
-      const res = await window.api.restreamUpdateInfo(st.restream, {
+    async apply() {
+      const t = this.title.value.trim();
+      const changedCat = this.category.value.trim() && this.category.value.trim() !== (this.current.category || '');
+      if (changedCat && !this.chosen) return this.setFeedback('Choisis la catégorie dans la liste proposée.', true);
+      if (!t && !this.chosen) return;
+      this.setFeedback('Mise à jour…');
+      const c = this.chosen;
+      const res = await window.api.restreamUpdateInfo(MS.store.settings.restream, {
         title: t,
-        twitchCategoryId: chosen ? chosen.twitchId || undefined : undefined,
-        twitchCategoryName: chosen && chosen.twitchId ? chosen.name : undefined,
-        kickCategoryId: chosen ? chosen.kickId || undefined : undefined,
-        kickCategoryName: chosen && chosen.kickId ? chosen.name : undefined,
+        twitchCategoryId: c ? c.twitchId || undefined : undefined,
+        twitchCategoryName: c && c.twitchId ? c.name : undefined,
+        kickCategoryId: c ? c.kickId || undefined : undefined,
+        kickCategoryName: c && c.kickId ? c.name : undefined,
       });
-      if (!res.ok) {
-        feedback.className = 'live-feedback error';
-        feedback.textContent = res.error;
-        return;
-      }
+      if (!res.ok) return this.setFeedback(res.error, true);
       const results = Object.entries(res.data);
       const failed = results.filter(([, v]) => !v.ok);
-      if (!results.length) {
-        feedback.className = 'live-feedback error';
-        feedback.textContent = 'Aucune plateforme connectée dans Restream.';
-        return;
-      }
-      if (failed.length) {
-        feedback.className = 'live-feedback error';
-        feedback.textContent = failed.map(([p, v]) => `${p} : ${v.error}`).join(' · ');
-        return;
-      }
+      if (!results.length) return this.setFeedback('Aucune plateforme connectée dans Restream.', true);
+      if (failed.length) return this.setFeedback(failed.map(([p, v]) => `${p} : ${v.error}`).join(' · '), true);
       if (live.session) {
         live.session.title = t || live.session.title;
-        if (chosen) live.session.category = chosen.name;
+        if (c) live.session.category = c.name;
       }
-      MS.toast(`Titre${chosen ? ' et catégorie' : ''} mis à jour sur ${results.map(([p]) => (p === 'twitch' ? 'Twitch' : 'Kick')).join(' et ')}.`, 'success', 4000);
-      live.pollViewers();
-      closeModal(true);
-    };
-
-    MS.modal({
-      title: 'Informations du live',
-      content,
-      width: 520,
-      onOpen: (close) => (closeModal = close),
-      buttons: [
-        { label: 'Annuler', value: false },
-        { label: 'Mettre à jour', primary: true, onClick: apply },
-      ],
-    });
+      this.setFeedback(`✓ Mis à jour sur ${results.map(([p]) => (p === 'twitch' ? 'Twitch' : 'Kick')).join(' et ')}.`);
+      setTimeout(() => this.feedback.textContent.startsWith('✓') && this.setFeedback(''), 4000);
+      this.titleDirty = false;
+      this.categoryDirty = false;
+      this.chosen = null;
+      await this.refresh();
+      live.render();
+    },
   };
+
+  /** Affiche le dock « Titre et catégorie » (le réactive s'il était masqué) et place le curseur sur le titre. */
+  MS.openLiveInfo = function () {
+    const docks = MS.store.settings.ui.docks;
+    if (!docks.liveinfo) {
+      docks.liveinfo = true;
+      MS.store.save();
+      MS.layout.apply();
+    }
+    const dock = MS.$('#dock-liveinfo');
+    dock.classList.remove('flash');
+    void dock.offsetWidth;
+    dock.classList.add('flash');
+    if (!liveDock.form.hidden) liveDock.title.focus();
+  };
+
+  live.dock = liveDock;
 
   MS.live = live;
 })();

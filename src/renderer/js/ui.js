@@ -84,7 +84,6 @@
           if (item) MS.openFilters(item.sourceId);
         },
         studio: () => store().setStudio(!store().settings.ui.studio),
-        'live-info': () => MS.openLiveInfo(),
         transition: () => MS.compositor.switchScene(store().data.previewSceneId),
         'chat-clear': () => MS.chat.clear(),
         'chat-settings': () => MS.openSettings('chat'),
@@ -731,7 +730,7 @@
     },
   };
 
-  const DOCK_LABELS = { scenes: 'Scènes', sources: 'Sources', mixer: 'Mixeur audio', transitions: 'Transitions', controls: 'Commandes', chat: 'Chat' };
+  const DOCK_LABELS = { scenes: 'Scènes', sources: 'Sources', mixer: 'Mixeur audio', transitions: 'Transitions', controls: 'Commandes', chat: 'Chat', liveinfo: 'Titre et catégorie' };
 
   // Graduation du mixeur, de −60 dB à 0 dB (échelle linéaire en dB, comme OBS).
   const METER_TICKS = [-60, -45, -30, -20, -10, -5, 0];

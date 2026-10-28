@@ -5,15 +5,15 @@
   const el = MS.el;
 
   // Deux zones de docks : la rangée du bas et la colonne à droite de l'aperçu.
-  const DOCK_IDS = ['scenes', 'sources', 'mixer', 'transitions', 'controls', 'chat'];
+  const DOCK_IDS = ['scenes', 'sources', 'mixer', 'transitions', 'controls', 'chat', 'liveinfo'];
   const MIN_DOCK = 90; // px
   const DRAG_THRESHOLD = 6;
 
   function defaultLayout() {
     return {
       bottom: ['scenes', 'sources', 'mixer', 'transitions', 'controls'],
-      side: ['chat'],
-      weights: { scenes: 1, sources: 1.3, mixer: 2, transitions: 0.9, controls: 1, chat: 1 },
+      side: ['chat', 'liveinfo'],
+      weights: { scenes: 1, sources: 1.3, mixer: 2, transitions: 0.9, controls: 1, chat: 1.7, liveinfo: 1 },
       bottomHeight: 290,
       sideWidth: 340,
     };

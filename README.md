@@ -23,7 +23,7 @@ Composez vos scènes à partir de plusieurs sources (écran, webcam, images, vid
 - **Mises à jour automatiques** : MyStream vérifie les nouvelles releases au démarrage puis toutes les 4 h ; l'installateur Windows et l'AppImage Linux se mettent à jour tout seuls (installation à la fermeture). Les autres formats affichent un lien de téléchargement.
 - **Mixeur audio** : VU-mètres gradués en dB (−60 à 0), crête maintenue 1,5 s, alerte « SATURE » pendant 3 s quand une source sature ; faders, muet, écoute (monitoring) par source ; sources globales *Mic/Aux* et *Audio du bureau*.
 - **Barre « En direct »** (pendant le live) : durée, spectateurs Twitch et Kick, titre et catégorie, courbe du débit sur 2 minutes avec le débit demandé en repère, images perdues en nombre et en pourcentage. Pendant une reconnexion, la pastille passe à l'orange.
-- **Titre et catégorie du live** modifiables depuis MyStream sur Twitch et Kick en même temps (via Restream), avec des titres enregistrés réutilisables.
+- **Dock « Titre et catégorie »** : titre et catégorie actuels de Twitch et Kick, spectateurs, modification sur les deux plateformes en même temps (via Restream), recherche de catégorie et titres enregistrés réutilisables. Il se déplace et se masque comme les autres docks.
 - **Récap de fin de live** : durée, messages du chat par plateforme, pic de spectateurs, images perdues, reconnexions, débit moyen et activité du chat minute par minute. Les récaps sont gardés dans *Fichier > Historique des lives*.
 - **Streaming RTMP/RTMPS** : Twitch, YouTube, Kick, Facebook Live ou serveur personnalisé, débit affiché en direct.
 - **Encodeur matériel** détecté automatiquement (NVIDIA NVENC, Intel Quick Sync, AMD AMF, Apple VideoToolbox), sinon x264.
@@ -71,7 +71,7 @@ Les mises à jour automatiques téléchargent les releases GitHub sans authentif
 3. **Paramètres > Stream** : choisis le service **Restream (BloopStudio)**.
 4. **Paramètres > Chat** : choisis **Restream** pour afficher le chat Twitch + Kick (avec les vrais badges Twitch).
 5. Démarre le streaming : Restream relaie le flux vers Twitch et Kick sans le réencoder.
-6. Les spectateurs, le titre et la catégorie viennent des comptes Twitch et Kick connectés dans Restream (boutons OAuth de son interface). *Titre et catégorie…* (dock Commandes ou menu Fichier) les modifie sur les deux plateformes d'un coup.
+6. Les spectateurs, le titre et la catégorie viennent des comptes Twitch et Kick connectés dans Restream (boutons OAuth de son interface). Le dock *Titre et catégorie* les modifie sur les deux plateformes d'un coup.
 
 Pour incruster le chat dans le stream, ajoute une source **Chat du stream** à ta scène.
 
@@ -119,7 +119,7 @@ src/
 │       ├── compositor.js  # rendu des scènes, cadence d'images, filtres, incrustation, mode studio
 │       ├── preview.js     # interactions de l'aperçu (sélection, déplacement, redimensionnement)
 │       ├── outputs.js     # enregistrement et streaming (MediaRecorder → FFmpeg)
-│       ├── live.js        # barre « En direct », titre/catégorie (via Restream), récap et historique des lives
+│       ├── live.js        # barre « En direct », dock Titre et catégorie (via Restream), récap et historique des lives
 │       ├── layout.js      # docks déplaçables, redimensionnables, dispositions enregistrées
 │       ├── dialogs.js     # fenêtres modales, propriétés, paramètres
 │       └── ui.js          # docks : scènes, sources, mixeur, transitions, commandes
