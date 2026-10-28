@@ -453,6 +453,7 @@
               btn.disabled = false;
               if (!r.ok) return MS.toast(`Restream : ${r.error}`, 'error', 8000);
               const d = Object.entries(r.status.destinations).map(([k, v]) => `${k} : ${v.status}`).join(', ');
+              if (r.rtmpError) return MS.toast(`Restream répond, mais pas son port RTMP (le streaming échouera).\n${r.rtmpError}`, 'error', 15000);
               MS.toast(`Restream OK\nIngestion : ${r.ingest}\n${d || 'aucune destination'}`, 'success', 8000);
             },
           },

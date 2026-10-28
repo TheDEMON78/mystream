@@ -4,6 +4,7 @@
 // d'ingestion RTMP, l'état des relais Twitch/Kick et le chat agrégé (SSE).
 const http = require('http');
 const https = require('https');
+const netSocket = require('net');
 
 function baseUrl(cfg) {
   const raw = String(cfg.url || '').trim().replace(/\/+$/, '');
@@ -70,6 +71,45 @@ async function ingestUrl(cfg) {
   const host = baseUrl(cfg).hostname.replace(/^localhost$/i, '127.0.0.1');
   const h = host.includes(':') ? `[${host}]` : host;
   return { url: `rtmp://${h}:${conf.rtmpPort || 1935}/live/${conf.ingestKey}`, key: conf.ingestKey };
+}
+
+/**
+ * Vérifie que le serveur RTMP accepte une connexion TCP avant de lancer
+ * FFmpeg : un port bloqué donnerait sinon une erreur FFmpeg obscure
+ * (« Error number -138 ») et une boucle de reconnexions inutiles.
+ */
+function checkRtmp(rtmpUrl, timeout = 5000) {
+  let u;
+  try {
+    u = new URL(rtmpUrl);
+  } catch {
+    return Promise.reject(new Error(`Adresse RTMP invalide : ${rtmpUrl}`));
+  }
+  const host = u.hostname.replace(/^\[|\]$/g, '');
+  const port = Number(u.port) || (u.protocol === 'rtmps:' ? 443 : 1935);
+  const where = `${host}:${port}`;
+  return new Promise((resolve, reject) => {
+    const sock = netSocket.connect({ host, port });
+    const fail = (msg) => {
+      sock.destroy();
+      reject(new Error(msg));
+    };
+    sock.setTimeout(timeout, () =>
+      fail(
+        `Le serveur RTMP ${where} ne répond pas. Le port ${port} est sans doute bloqué par un pare-feu (sur un Synology : Panneau de configuration > Sécurité > Pare-feu, autorise le port ${port} en TCP), ou l'adresse n'est pas la bonne.`
+      )
+    );
+    sock.once('connect', () => {
+      sock.destroy();
+      resolve();
+    });
+    sock.once('error', (e) => {
+      if (e.code === 'ECONNREFUSED') fail(`Le serveur RTMP ${where} refuse la connexion : Restream (ou le serveur) n'est pas lancé, ou son serveur RTMP n'a pas démarré (port ${port} déjà utilisé ? voir son journal).`);
+      else if (e.code === 'ENOTFOUND' || e.code === 'EAI_AGAIN') fail(`Adresse du serveur RTMP introuvable : ${host}.`);
+      else if (e.code === 'EHOSTUNREACH' || e.code === 'ENETUNREACH') fail(`Le serveur RTMP ${where} est injoignable depuis ce PC (réseau différent ou machine éteinte ?).`);
+      else fail(`Connexion au serveur RTMP ${where} impossible : ${e.message}`);
+    });
+  });
 }
 
 async function status(cfg) {
@@ -197,4 +237,4 @@ class ChatStream {
   }
 }
 
-module.exports = { ingestUrl, status, liveInfo, categories, updateInfo, ChatStream };
+module.exports = { ingestUrl, checkRtmp, status, liveInfo, categories, updateInfo, ChatStream };

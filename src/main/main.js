@@ -158,6 +158,7 @@ async function buildStreamOutput(out, opts) {
     url = `${s.server.replace(/\/+$/, '')}/${s.key}`;
     secret = s.key;
   }
+  await restream.checkRtmp(url);
   const available = await encoders.detect(FFMPEG);
   const enc = s.encoder === 'auto' || !available.includes(s.encoder) ? available[0] : s.encoder;
   out.encoder = enc;
@@ -383,7 +384,9 @@ ipcMain.handle('encoders:list', async () => {
 ipcMain.handle('restream:test', async (_e, cfg) => {
   try {
     const [ingest, st] = await Promise.all([restream.ingestUrl(cfg), restream.status(cfg)]);
-    return { ok: true, ingest: ingest.url.replace(ingest.key, '****'), status: st };
+    // L'interface web peut répondre alors que le port RTMP est bloqué : on le vérifie aussi.
+    const rtmpError = await restream.checkRtmp(ingest.url).then(() => null, (e) => e.message);
+    return { ok: true, ingest: ingest.url.replace(ingest.key, '****'), status: st, rtmpError };
   } catch (e) {
     return { ok: false, error: e.message };
   }
