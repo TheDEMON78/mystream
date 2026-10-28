@@ -28,7 +28,8 @@
           const primary = btns.find((b) => b.primary);
           if (primary) {
             e.preventDefault();
-            close(primary.value);
+            if (primary.onClick) primary.onClick();
+            else close(primary.value);
           }
         }
       };
@@ -626,5 +627,52 @@
     MS.store.save();
     MS.syncGlobalAudio();
     MS.emit('settings:changed');
+  };
+
+  /* Transitions ----------------------------------------------------------- */
+  MS.TRANSITION_LABELS = { default: 'par défaut', fade: 'Fondu', cut: 'Coupure', slide: 'Glissement', zoom: 'Zoom', stinger: 'Stinger' };
+  const DIRECTIONS = { left: 'vers la gauche', right: 'vers la droite', up: 'vers le haut', down: 'vers le bas' };
+
+  MS.transitionSummary = function (t) {
+    if (t.type === 'slide') return `Glissement ${DIRECTIONS[t.direction] || ''}`;
+    if (t.type === 'stinger') {
+      if (!t.stingerFile) return 'Aucune vidéo choisie : la scène change sans effet.';
+      return `${t.stingerFile.split(/[\\/]/).pop()} · changement à ${t.stingerPoint} ms`;
+    }
+    return '';
+  };
+
+  /**
+   * Réglages d'une transition : celle du dock (sceneId absent) ou celle
+   * utilisée pour arriver sur une scène précise (remplace celle du dock).
+   */
+  MS.openTransitionOptions = async function (sceneId) {
+    const scene = sceneId ? MS.store.scene(sceneId) : null;
+    const global = MS.store.settings.transition;
+    const base = scene ? scene.transition || { ...global, type: 'default' } : global;
+    const types = Object.entries(MS.TRANSITION_LABELS).filter(([k]) => scene || k !== 'default');
+    const custom = (v) => v.type !== 'default';
+    const fields = [
+      { key: 'type', label: 'Type', type: 'select', options: types.map(([value, label]) => ({ value, label: value === 'default' ? `Celle du dock Transitions (${MS.TRANSITION_LABELS[global.type]})` : label })) },
+      { key: 'duration', label: 'Durée (ms)', type: 'number', min: 0, max: 10000, step: 50, showIf: (v) => custom(v) && v.type !== 'cut' && v.type !== 'stinger' },
+      { key: 'direction', label: 'Direction', type: 'select', options: Object.entries(DIRECTIONS).map(([value, label]) => ({ value, label: label[0].toUpperCase() + label.slice(1) })), showIf: (v) => v.type === 'slide' },
+      { key: 'stingerFile', label: 'Vidéo du stinger', type: 'file', filters: [{ name: 'Vidéos', extensions: ['webm', 'mov', 'mp4', 'mkv'] }], showIf: (v) => v.type === 'stinger' },
+      { type: 'info', text: 'Une vidéo WebM (VP9) avec transparence passe par-dessus les scènes. Une vidéo sans transparence doit couvrir tout l’écran au moment du changement.', showIf: (v) => v.type === 'stinger' },
+      { key: 'stingerPoint', label: 'Changer de scène à (ms après le début de la vidéo)', type: 'number', min: 0, max: 20000, step: 50, showIf: (v) => v.type === 'stinger' },
+      { key: 'stingerAudio', label: 'Diffuser le son de la vidéo', type: 'checkbox', showIf: (v) => v.type === 'stinger' },
+    ];
+    const values = { duration: 300, direction: 'left', stingerFile: '', stingerPoint: 600, stingerAudio: true, ...base };
+    const form = MS.buildForm(fields, values);
+    const ok = await MS.modal({ title: scene ? `Transition vers « ${scene.name} »` : 'Options de la transition', content: form.element, width: 520 });
+    if (!ok) return;
+    const v = form.values();
+    const t = { type: v.type, duration: MS.clamp(Number(v.duration) || 0, 0, 10000), direction: v.direction || 'left', stingerFile: v.stingerFile || '', stingerPoint: MS.clamp(Number(v.stingerPoint) || 0, 0, 20000), stingerAudio: Boolean(v.stingerAudio) };
+    if (scene) {
+      scene.transition = t.type === 'default' ? null : t;
+      MS.emit('scenes:changed');
+    } else Object.assign(global, t);
+    MS.store.save();
+    MS.compositor.preloadStingers();
+    MS.emit('transition:changed');
   };
 })();

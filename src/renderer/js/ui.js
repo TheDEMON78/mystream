@@ -16,7 +16,7 @@
       this.bindToolbar();
       this.bindMenus();
       this.renderTransitions();
-      this.applyDocks();
+      MS.layout.init();
 
       MS.on('scenes:changed', () => this.renderScenes());
       MS.on('scene:switched', () => {
@@ -84,6 +84,7 @@
           if (item) MS.openFilters(item.sourceId);
         },
         studio: () => store().setStudio(!store().settings.ui.studio),
+        'live-info': () => MS.openLiveInfo(),
         transition: () => MS.compositor.switchScene(store().data.previewSceneId),
         'chat-clear': () => MS.chat.clear(),
         'chat-settings': () => MS.openSettings('chat'),
@@ -154,6 +155,7 @@
                     { label: 'Renommer…', action: () => rename(s) },
                     { label: 'Passer à l’antenne', action: () => MS.compositor.switchScene(s.id) },
                     { label: 'Dupliquer', action: () => this.duplicateScene(s.id) },
+                    { label: `Transition vers cette scène… (${s.transition ? MS.TRANSITION_LABELS[s.transition.type] : 'par défaut'})`, action: () => MS.openTransitionOptions(s.id) },
                     { label: 'Supprimer', action: () => MS.$('[data-act="scene-remove"]').click() },
                   ],
                   e.clientX,
@@ -397,24 +399,42 @@
               'div',
               { class: 'channel-head' },
               el('span', { class: 'name', text: src.name }),
+              el('span', { class: 'clip', text: 'SATURE' }),
               hasAudioFx(src) ? el('span', { class: 'fx', text: 'FX', title: 'Filtres audio actifs' }) : null,
               db
             ),
-            el('div', { class: 'meter' }, el('div', { class: 'meter-cover' }), el('div', { class: 'meter-ticks' })),
+            el('div', { class: 'meter' }, el('div', { class: 'meter-cover' }), el('div', { class: 'meter-ticks' }, METER_TICKS.map((d) => el('i', { style: { left: `${dbPos(d) * 100}%` } }))), el('div', { class: 'meter-peak' })),
+            el('div', { class: 'meter-scale' }, METER_TICKS.map((d) => el('span', { text: d === 0 ? '0' : String(d).replace('-', '−'), style: { left: `${dbPos(d) * 100}%` } }))),
             el('div', { class: 'channel-controls' }, fader, mute, monitor, props)
           );
         })
       );
     },
 
-    /** VU-mètres à 30 Hz (largement suffisant à l'œil), seulement si le dock est visible. */
+    /**
+     * VU-mètres à 30 Hz (largement suffisant à l'œil), seulement si le dock
+     * est visible. La crête reste affichée 1,5 s puis redescend ; une source
+     * qui sature reste signalée 3 s pour qu'on ait le temps de le voir.
+     */
     meterLoop() {
+      const holds = new Map();
       setInterval(() => {
         if (MS.$('#dock-mixer').hidden) return;
+        const now = performance.now();
         for (const ch of this.mixer.querySelectorAll('.channel')) {
-          const db = MS.audio.level(ch.dataset.id);
-          const level = Number.isFinite(db) ? MS.clamp((db + 60) / 60, 0, 1) : 0;
+          const id = ch.dataset.id;
+          const db = MS.audio.level(id);
+          const level = Number.isFinite(db) ? dbPos(db) : 0;
           ch.querySelector('.meter-cover').style.transform = `scaleX(${1 - level})`;
+          let h = holds.get(id);
+          if (!h || level >= h.level) h = { level, at: now, clipUntil: h ? h.clipUntil : 0 };
+          else if (now - h.at > 1500) h.level = Math.max(level, h.level - 0.012);
+          if (Number.isFinite(db) && db >= -0.5) h.clipUntil = now + 3000;
+          holds.set(id, h);
+          const peak = ch.querySelector('.meter-peak');
+          peak.style.left = `calc(${h.level * 100}% - 2px)`;
+          peak.style.opacity = h.level > 0.01 ? '1' : '0';
+          ch.classList.toggle('clipping', h.clipUntil > now);
         }
       }, 33);
     },
@@ -424,19 +444,29 @@
       const t = store().settings.transition;
       const type = MS.$('#transition-type');
       const dur = MS.$('#transition-duration');
-      type.value = t.type;
-      dur.value = t.duration;
-      dur.disabled = t.type === 'cut';
+      const refresh = () => {
+        type.value = t.type;
+        dur.value = t.duration;
+        // Le stinger dure le temps de sa vidéo ; la coupure est instantanée.
+        MS.$('#transition-duration-field').hidden = t.type === 'cut' || t.type === 'stinger';
+        MS.$('#transition-options').hidden = t.type !== 'slide' && t.type !== 'stinger';
+        MS.$('#transition-summary').textContent = MS.transitionSummary(t);
+      };
       type.addEventListener('change', () => {
         t.type = type.value;
-        dur.disabled = t.type === 'cut';
         store().save();
+        refresh();
+        MS.compositor.preloadStingers();
+        if (t.type === 'stinger' && !t.stingerFile) MS.openTransitionOptions();
       });
       dur.addEventListener('change', () => {
         t.duration = MS.clamp(Number(dur.value) || 0, 0, 10000);
-        dur.value = t.duration;
         store().save();
+        refresh();
       });
+      MS.$('#transition-options').addEventListener('click', () => MS.openTransitionOptions());
+      MS.on('transition:changed', refresh);
+      refresh();
     },
 
     /* Commandes et barre d'état --------------------------------------- */
@@ -554,6 +584,9 @@
           { label: 'Importer une collection de scènes…', action: () => MS.importCollection(false) },
           { label: 'Restaurer une sauvegarde automatique…', action: () => MS.importCollection(true) },
           { separator: true },
+          { label: 'Titre et catégorie du live…', action: () => MS.openLiveInfo() },
+          { label: 'Historique des lives…', action: () => MS.live.showHistory() },
+          { separator: true },
           { label: 'Paramètres', action: () => MS.openSettings() },
           { separator: true },
           { label: 'Quitter', action: () => window.close() },
@@ -568,8 +601,16 @@
         view: [
           { label: check(ui.studio, 'Mode studio'), action: () => store().setStudio(!ui.studio) },
           { label: check(ui.docks.chat, 'Chat'), action: () => this.toggleDock('chat') },
+          {
+            label: check(ui.liveBar !== false, 'Barre « En direct » pendant le live'),
+            action: () => {
+              ui.liveBar = ui.liveBar === false;
+              store().save();
+              MS.live.render();
+            },
+          },
         ],
-        docks: Object.entries(DOCK_LABELS).map(([k, label]) => ({ label: check(ui.docks[k], label), action: () => this.toggleDock(k) })),
+        docks: [...Object.entries(DOCK_LABELS).map(([k, label]) => ({ label: check(ui.docks[k], label), action: () => this.toggleDock(k) })), ...MS.layout.menuItems()],
         help: [
           { label: 'Assistant de configuration…', action: () => MS.openWizard() },
           { label: 'Rechercher des mises à jour', action: () => this.checkUpdates() },
@@ -592,18 +633,7 @@
     },
 
     applyDocks() {
-      const docks = store().settings.ui.docks;
-      const weights = { scenes: 1, sources: 1.3, mixer: 2, transitions: 0.9, controls: 1 };
-      const cols = [];
-      for (const [k, w] of Object.entries(weights)) {
-        const d = MS.$(`#dock-${k}`);
-        d.hidden = !docks[k];
-        if (docks[k]) cols.push(`${w}fr`);
-      }
-      MS.$('#docks').style.gridTemplateColumns = cols.join(' ');
-      MS.$('#docks').hidden = !cols.length;
-      MS.$('#dock-chat').hidden = !docks.chat;
-      MS.$('#app').classList.toggle('no-chat', !docks.chat);
+      MS.layout.apply();
     },
 
     /* Mises à jour ---------------------------------------------------------- */
@@ -702,6 +732,10 @@
   };
 
   const DOCK_LABELS = { scenes: 'Scènes', sources: 'Sources', mixer: 'Mixeur audio', transitions: 'Transitions', controls: 'Commandes', chat: 'Chat' };
+
+  // Graduation du mixeur, de −60 dB à 0 dB (échelle linéaire en dB, comme OBS).
+  const METER_TICKS = [-60, -45, -30, -20, -10, -5, 0];
+  const dbPos = (db) => MS.clamp((db + 60) / 60, 0, 1);
 
   function hasAudioFx(src) {
     const f = src.audioFilters;

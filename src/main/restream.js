@@ -18,7 +18,7 @@ function options(cfg, extraHeaders = {}) {
   return { headers, rejectUnauthorized: !cfg.allowSelfSigned };
 }
 
-function request(cfg, path, timeout = 5000) {
+function request(cfg, path, timeout = 5000, body = null) {
   return new Promise((resolve, reject) => {
     let url;
     try {
@@ -28,22 +28,28 @@ function request(cfg, path, timeout = 5000) {
       return reject(e);
     }
     const lib = url.protocol === 'https:' ? https : http;
-    const req = lib.get(url, { ...options(cfg), timeout }, (res) => {
-      let body = '';
+    const payload = body ? JSON.stringify(body) : null;
+    const opts = options(cfg, payload ? { 'Content-Type': 'application/json' } : {});
+    const req = lib.request(url, { ...opts, method: payload ? 'POST' : 'GET', timeout }, (res) => {
+      let text = '';
       res.setEncoding('utf8');
-      res.on('data', (d) => (body += d));
+      res.on('data', (d) => (text += d));
       res.on('end', () => {
         if (res.statusCode === 401) return reject(new Error('Mot de passe Restream incorrect.'));
-        if (res.statusCode >= 400) return reject(new Error(`Restream a répondu ${res.statusCode}.`));
+        let json = null;
         try {
-          resolve(JSON.parse(body));
+          json = JSON.parse(text);
         } catch {
-          reject(new Error("Réponse inattendue : est-ce bien l'adresse de Restream ?"));
+          /* réponse non JSON */
         }
+        if (res.statusCode >= 400) return reject(new Error((json && json.error) || `Restream a répondu ${res.statusCode}.`));
+        if (!json) return reject(new Error("Réponse inattendue : est-ce bien l'adresse de Restream ?"));
+        resolve(json);
       });
     });
     req.on('timeout', () => req.destroy(new Error('Restream ne répond pas.')));
     req.on('error', (e) => reject(new Error(e.code === 'ECONNREFUSED' ? 'Restream est injoignable (application lancée ?).' : e.message)));
+    req.end(payload || undefined);
   });
 }
 
@@ -73,6 +79,44 @@ async function status(cfg) {
     destinations[name] = { status: d.status, failureReason: d.failureReason || null, outputBps: d.outputBps || 0 };
   }
   return { obsConnected: Boolean(s.obsConnected), incomingBps: s.incomingBps || 0, destinations };
+}
+
+const PLATFORMS = ['twitch', 'kick'];
+
+/**
+ * Titre, catégorie et spectateurs de chaque plateforme, tels que Restream
+ * les lit via les API officielles (comptes connectés dans Restream).
+ */
+async function liveInfo(cfg) {
+  const out = {};
+  await Promise.all(
+    PLATFORMS.map(async (p) => {
+      try {
+        const st = await request(cfg, `/api/${p}/status`, 8000);
+        out[p] = {
+          connected: Boolean(st.connected),
+          title: st.title || '',
+          category: st.category || '',
+          viewerCount: typeof st.viewerCount === 'number' ? st.viewerCount : null,
+        };
+      } catch (e) {
+        out[p] = { connected: false, error: e.message };
+      }
+    })
+  );
+  return out;
+}
+
+/** Catégories communes aux plateformes connectées (recherche à partir de 3 lettres). */
+async function categories(cfg, query) {
+  const r = await request(cfg, `/api/unified/categories?query=${encodeURIComponent(query)}`, 8000);
+  return Array.isArray(r.categories) ? r.categories : [];
+}
+
+/** Met à jour le titre et/ou la catégorie sur toutes les plateformes connectées. */
+async function updateInfo(cfg, info) {
+  const r = await request(cfg, '/api/unified/update', 10000, info);
+  return r.results || {};
 }
 
 /** Flux SSE du chat agrégé, avec reconnexion automatique. */
@@ -153,4 +197,4 @@ class ChatStream {
   }
 }
 
-module.exports = { ingestUrl, status, ChatStream };
+module.exports = { ingestUrl, status, liveInfo, categories, updateInfo, ChatStream };

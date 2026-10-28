@@ -21,12 +21,16 @@
         stream: { service: 'twitch', server: STREAM_SERVICES.twitch.server, key: '', videoBitrate: 4500, audioBitrate: 160, preset: 'veryfast', encoder: 'auto' },
         output: { recordPath: '', format: 'mp4', videoBitrate: 8000, audioBitrate: 192, preset: 'veryfast' },
         audio: { micDevice: 'default', desktopAudio: false },
-        transition: { type: 'fade', duration: 300 },
+        transition: { type: 'fade', duration: 300, direction: 'left', stingerFile: '', stingerPoint: 600, stingerAudio: true },
+        liveInfo: { titles: [] },
         restream: { url: 'http://localhost:3050', password: '', allowSelfSigned: true, rtmpUrl: '' },
         chat: { mode: 'off', twitchChannel: '', kickChannel: '', kickChatroomId: '' },
         ui: {
           studio: false,
           docks: { scenes: true, sources: true, mixer: true, transitions: true, controls: true, chat: true },
+          liveBar: true,
+          layout: null, // disposition des docks (null = disposition d'origine)
+          layouts: {}, // dispositions enregistrées par nom
           minimizeToTray: false,
           confirmStopStream: true,
           hotkeys: { toggleStream: '', toggleRecord: '', toggleMic: '', nextScene: '', prevScene: '', transition: '' },
@@ -36,6 +40,7 @@
       scenes: [],
       currentSceneId: null,
       previewSceneId: null,
+      liveHistory: [],
     };
   }
 

@@ -5,7 +5,8 @@ Composez vos scènes à partir de plusieurs sources (écran, webcam, images, vid
 
 ## Fonctionnalités
 
-- **Scènes** : création, renommage (double-clic), suppression, réorganisation, transitions *Fondu* ou *Coupure* avec durée réglable.
+- **Scènes** : création, renommage (double-clic), suppression, réorganisation.
+- **Transitions** : *Fondu*, *Coupure*, *Glissement* (4 directions), *Zoom* et *Stinger* (vidéo animée, avec transparence en WebM VP9, son diffusé dans le live et moment du changement de scène réglable). Chaque scène peut avoir sa propre transition (clic droit sur la scène).
 - **Mode studio** : aperçu et programme côte à côte, bouton *Transition* pour passer l'aperçu à l'antenne (double-clic sur une scène = à l'antenne).
 - **Sources** :
   - Capture d'écran / de fenêtre (sélecteur avec miniatures), **avec le son de la fenêtre capturée** sous Windows 10 (2004) ou plus récent : seul le son de l'application est pris, pas celui de Discord ou de la musique à côté. Pour un écran, c'est le son de tout le PC sauf MyStream (pas d'écho du retour casque).
@@ -20,14 +21,17 @@ Composez vos scènes à partir de plusieurs sources (écran, webcam, images, vid
 - **Filtres par source** : opacité, luminosité, contraste, saturation, teinte, recadrage, miroir et **incrustation fond vert** (calculée sur la carte graphique).
 - **Dock Chat** : chat Twitch + Kick en direct à côté de l'aperçu, avec badges et emotes. Via Restream (Twitch + Kick, API officielles) ou en lecture directe sans compte : Twitch par son chat public, Kick par sa page de chat officielle « popout » (celle que Kick propose pour OBS), lue en arrière-plan avec les vrais badges et emotes. En lecture directe, la modération est suivie : un message supprimé, les messages d'un viewer banni ou en timeout, ou un chat vidé disparaissent aussi du dock et de l'incrustation.
 - **Mises à jour automatiques** : MyStream vérifie les nouvelles releases au démarrage puis toutes les 4 h ; l'installateur Windows et l'AppImage Linux se mettent à jour tout seuls (installation à la fermeture). Les autres formats affichent un lien de téléchargement.
-- **Mixeur audio** : VU-mètres, faders, muet, écoute (monitoring) par source ; sources globales *Mic/Aux* et *Audio du bureau*.
+- **Mixeur audio** : VU-mètres gradués en dB (−60 à 0), crête maintenue 1,5 s, alerte « SATURE » pendant 3 s quand une source sature ; faders, muet, écoute (monitoring) par source ; sources globales *Mic/Aux* et *Audio du bureau*.
+- **Barre « En direct »** (pendant le live) : durée, spectateurs Twitch et Kick, titre et catégorie, courbe du débit sur 2 minutes avec le débit demandé en repère, images perdues en nombre et en pourcentage. Pendant une reconnexion, la pastille passe à l'orange.
+- **Titre et catégorie du live** modifiables depuis MyStream sur Twitch et Kick en même temps (via Restream), avec des titres enregistrés réutilisables.
+- **Récap de fin de live** : durée, messages du chat par plateforme, pic de spectateurs, images perdues, reconnexions, débit moyen et activité du chat minute par minute. Les récaps sont gardés dans *Fichier > Historique des lives*.
 - **Streaming RTMP/RTMPS** : Twitch, YouTube, Kick, Facebook Live ou serveur personnalisé, débit affiché en direct.
 - **Encodeur matériel** détecté automatiquement (NVIDIA NVENC, Intel Quick Sync, AMD AMF, Apple VideoToolbox), sinon x264.
 - **Intégration [Restream](https://github.com/TheDEMON78/restream)** : choisir le service *Restream (BloopStudio)* suffit, MyStream récupère tout seul l'adresse et la clé d'ingestion, affiche l'état des relais Twitch/Kick dans la barre d'état et le chat agrégé dans le dock.
 - **Enregistrement** : MP4 (H.264/AAC), MKV ou WebM, dossier configurable.
 - **Paramètres** : résolution du canevas (dont vertical 1080×1920), FPS, débits, préréglage x264, périphérique micro.
 - **Barre d'état** : FPS de rendu (cadence exacte, jamais au-dessus de la valeur demandée), images manquées, CPU/mémoire, durée du live et de l'enregistrement.
-- **Menus et docks** : Fichier / Édition / Affichage / Docks / Aide, chaque dock peut être masqué.
+- **Menus et docks** : Fichier / Édition / Affichage / Docks / Aide. Chaque dock peut être masqué, déplacé en le tirant par son titre (rangée du bas ou colonne de droite) et redimensionné avec les séparateurs. Les dispositions s'enregistrent sous un nom (*Docks > Enregistrer la disposition…*) et *Disposition d'origine* remet tout en place.
 
 ### Ce que MyStream corrige par rapport aux reproches faits à OBS
 
@@ -67,6 +71,7 @@ Les mises à jour automatiques téléchargent les releases GitHub sans authentif
 3. **Paramètres > Stream** : choisis le service **Restream (BloopStudio)**.
 4. **Paramètres > Chat** : choisis **Restream** pour afficher le chat Twitch + Kick (avec les vrais badges Twitch).
 5. Démarre le streaming : Restream relaie le flux vers Twitch et Kick sans le réencoder.
+6. Les spectateurs, le titre et la catégorie viennent des comptes Twitch et Kick connectés dans Restream (boutons OAuth de son interface). *Titre et catégorie…* (dock Commandes ou menu Fichier) les modifie sur les deux plateformes d'un coup.
 
 Pour incruster le chat dans le stream, ajoute une source **Chat du stream** à ta scène.
 
@@ -78,6 +83,7 @@ Pour incruster le chat dans le stream, ajoute une source **Chat du stream** à t
 - **Port RTMP** : MyStream envoie le flux sur le **même hôte**, port RTMP de Restream (1935 par défaut). Ce port doit être ouvert/redirigé sur le routeur ou le pare-feu du serveur.
 - **Adresse RTMP différente** (reverse proxy, port public redirigé, autre nom d'hôte) : renseigne le champ *Adresse RTMP*, ex. `rtmp://bloop.myds.me:19350`. La clé d'ingestion reste récupérée automatiquement.
 - Le chat Twitch fonctionne partout ; le chat Kick nécessite que Restream soit joignable en HTTPS (voir le README de Restream).
+- **Derrière le relais PHP de Restream** (`php-relay`) : mets l'adresse du site, sans `/restream`, ex. `https://bloop.myds.me` (l'API est relayée sur `/api`). Le RTMP n'est pas relayé : le port RTMP du NAS doit rester ouvert, ou renseigne *Adresse RTMP*.
 
 ## Développement
 
@@ -97,7 +103,7 @@ npm run build:native  # compile native/window-audio.cpp (Visual Studio sous Wind
 src/
 ├── main/
 │   ├── main.js        # processus principal : fenêtre, configuration, capture d'écran, FFmpeg
-│   ├── restream.js    # client Restream : adresse d'ingestion, état des relais, chat (SSE)
+│   ├── restream.js    # client Restream : ingestion, état des relais, titre/catégorie/spectateurs, chat (SSE)
 │   ├── browserSources.js # sources Navigateur rendues hors écran
 │   ├── encoders.js    # détection des encodeurs matériels
 │   ├── windowAudio.js # son d'une fenêtre (Windows) via native/window-audio.exe
@@ -113,6 +119,8 @@ src/
 │       ├── compositor.js  # rendu des scènes, cadence d'images, filtres, incrustation, mode studio
 │       ├── preview.js     # interactions de l'aperçu (sélection, déplacement, redimensionnement)
 │       ├── outputs.js     # enregistrement et streaming (MediaRecorder → FFmpeg)
+│       ├── live.js        # barre « En direct », titre/catégorie (via Restream), récap et historique des lives
+│       ├── layout.js      # docks déplaçables, redimensionnables, dispositions enregistrées
 │       ├── dialogs.js     # fenêtres modales, propriétés, paramètres
 │       └── ui.js          # docks : scènes, sources, mixeur, transitions, commandes
 └── assets/icon.png

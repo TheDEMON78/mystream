@@ -397,6 +397,18 @@ ipcMain.handle('restream:status', async (_e, cfg) => {
   }
 });
 
+// Infos du live (titre, catégorie, spectateurs) via les comptes connectés à Restream.
+const safe = (fn) => async (_e, ...args) => {
+  try {
+    return { ok: true, data: await fn(...args) };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+};
+ipcMain.handle('restream:live', safe((cfg) => restream.liveInfo(cfg)));
+ipcMain.handle('restream:categories', safe((cfg, query) => restream.categories(cfg, query)));
+ipcMain.handle('restream:update-info', safe((cfg, info) => restream.updateInfo(cfg, info)));
+
 const restreamChat = new restream.ChatStream(
   (msg) => send('chat:message', msg),
   (status, error) => send('chat:status', { platform: 'restream', status, error: error || null })

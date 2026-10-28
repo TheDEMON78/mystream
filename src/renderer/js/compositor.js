@@ -192,16 +192,105 @@
       tick();
     },
 
+    /** Transition utilisée pour arriver sur une scène : la sienne, sinon celle du dock. */
+    transitionFor(id) {
+      const scene = MS.store.scene(id);
+      return (scene && scene.transition) || MS.store.settings.transition;
+    },
+
     switchScene(id) {
       const from = MS.store.data.currentSceneId;
       if (from === id) return;
-      const t = MS.store.settings.transition;
-      if (t.type === 'fade' && t.duration > 0 && from) {
-        this.transition = { from, start: performance.now(), duration: Number(t.duration) };
-      } else {
-        this.transition = null;
+      const t = this.transitionFor(id);
+      const now = performance.now();
+      this.transition = null;
+      if (from && t.type === 'stinger') {
+        const v = this.stinger(t.stingerFile);
+        if (v && v.readyState >= 2 && v.duration) {
+          v.muted = !t.stingerAudio;
+          v.currentTime = 0;
+          v.play().catch(() => {});
+          this.transition = { type: 'stinger', from, start: now, video: v, point: Number(t.stingerPoint) || 0, duration: v.duration * 1000 };
+        }
+      } else if (from && t.type !== 'cut' && Number(t.duration) > 0) {
+        this.transition = { type: t.type, direction: t.direction, from, start: now, duration: Number(t.duration) };
       }
       MS.store.setCurrentScene(id);
+    },
+
+    /**
+     * Vidéos des stingers, chargées à l'avance pour démarrer sans délai.
+     * Leur son passe dans le mixage du live (pas dans le retour casque).
+     */
+    stinger(file) {
+      if (!file) return null;
+      this.stingers = this.stingers || new Map();
+      let v = this.stingers.get(file);
+      if (!v) {
+        v = document.createElement('video');
+        v.preload = 'auto';
+        v.playsInline = true;
+        v.src = MS.fileUrl(file);
+        v.addEventListener('error', () => MS.toast(`Vidéo du stinger illisible : ${file}`, 'error', 8000), { once: true });
+        try {
+          const node = MS.audio.ctx.createMediaElementSource(v);
+          node.connect(MS.audio.dest);
+        } catch (e) {
+          console.warn('Son du stinger indisponible', e);
+        }
+        v.load();
+        this.stingers.set(file, v);
+      }
+      return v;
+    },
+
+    preloadStingers() {
+      const files = new Set();
+      const add = (t) => t && t.type === 'stinger' && t.stingerFile && files.add(t.stingerFile);
+      add(MS.store.settings.transition);
+      MS.store.data.scenes.forEach((s) => add(s.transition));
+      files.forEach((f) => this.stinger(f));
+    },
+
+    /** Dessine une transition en cours ; renvoie false quand elle est terminée. */
+    drawTransition(ctx, tr, current, now) {
+      const { width: W, height: H } = MS.store.settings.video;
+      const from = MS.store.scene(tr.from);
+      const elapsed = now - tr.start;
+      if (tr.type === 'stinger') {
+        const v = tr.video;
+        if (v.ended || elapsed > tr.duration + 250) return false;
+        this.drawScene(ctx, elapsed < tr.point ? from : current, 1);
+        if (v.readyState >= 2) ctx.drawImage(v, 0, 0, W, H);
+        return true;
+      }
+      const p = elapsed / tr.duration;
+      if (p >= 1) return false;
+      const e = p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2; // ease-in-out
+      if (tr.type === 'slide') {
+        const [dx, dy] = { left: [-1, 0], right: [1, 0], up: [0, -1], down: [0, 1] }[tr.direction] || [-1, 0];
+        ctx.save();
+        ctx.translate(dx * W * e, dy * H * e);
+        this.drawScene(ctx, from, 1);
+        ctx.translate(-dx * W, -dy * H);
+        this.drawScene(ctx, current, 1);
+        ctx.restore();
+      } else if (tr.type === 'zoom') {
+        const zoom = (scene, scale, alpha) => {
+          ctx.save();
+          ctx.translate(W / 2, H / 2);
+          ctx.scale(scale, scale);
+          ctx.translate(-W / 2, -H / 2);
+          this.drawScene(ctx, scene, alpha);
+          ctx.restore();
+        };
+        zoom(from, 1 + 0.25 * e, 1 - e);
+        zoom(current, 0.8 + 0.2 * e, e);
+      } else {
+        this.drawScene(ctx, from, 1);
+        this.drawScene(ctx, current, p);
+      }
+      return true;
     },
 
     /** Dimensions de la source après recadrage. */
@@ -281,18 +370,8 @@
       ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
       const current = MS.store.currentScene();
-      if (this.transition) {
-        const p = (t0 - this.transition.start) / this.transition.duration;
-        if (p >= 1) {
-          this.transition = null;
-          this.drawScene(ctx, current, 1);
-        } else {
-          this.drawScene(ctx, MS.store.scene(this.transition.from), 1);
-          this.drawScene(ctx, current, p);
-        }
-      } else {
-        this.drawScene(ctx, current, 1);
-      }
+      if (this.transition && !this.drawTransition(ctx, this.transition, current, t0)) this.transition = null;
+      if (!this.transition) this.drawScene(ctx, current, 1);
 
       // Mode studio : l'aperçu est rendu directement à la taille affichée.
       if (MS.store.settings.ui.studio && this.studioCanvas.width > 1) {
