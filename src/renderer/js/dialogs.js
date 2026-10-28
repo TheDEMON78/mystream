@@ -195,7 +195,7 @@
         }
         case 'hotkey': {
           // Capture de la combinaison pressée ; Retour arrière ou Suppr pour effacer.
-          const hk = el('input', { class: 'input hotkey', type: 'text', readonly: true, value: v || '', placeholder: 'Cliquer puis appuyer sur les touches' });
+          const hk = el('input', { class: 'input hotkey', type: 'text', readonly: true, value: v || '', placeholder: 'Cliquez ici, puis appuyez sur la combinaison' });
           hk.addEventListener('keydown', (e) => {
             e.preventDefault();
             e.stopPropagation();
@@ -325,7 +325,7 @@
     const src = MS.store.source(sourceId);
     if (!src) return;
     const type = MS.SourceTypes[src.type] || {};
-    if (type.audioOnly) return MS.toast('Cette source est uniquement audio : pas de filtre vidéo.', 'info');
+    if (type.audioOnly) return MS.toast('Cette source ne contient que du son : utilisez ses filtres audio depuis le mixeur.', 'info', 6000);
     const backup = src.filters ? { ...src.filters } : null;
     const values = { ...MS.filterDefaults(), ...(src.filters || {}) };
     const num = (key, label, min, max) => ({ key, type: 'number', label, min, max });
@@ -399,7 +399,7 @@
           { key: 'service', type: 'select', label: 'Service', options: services },
           {
             type: 'info',
-            text: `Le flux part vers ton Restream (${st.restream.url || 'adresse à renseigner'}) qui le relaie à Twitch et Kick. Adresse RTMP et clé d’ingestion sont récupérées automatiquement : réglages dans l’onglet Restream.`,
+            text: `Le flux est envoyé à votre serveur Restream (${st.restream.url || 'adresse à renseigner'}), qui le relaie vers Twitch et Kick. L’adresse RTMP et la clé d’ingestion sont récupérées automatiquement ; les réglages se trouvent dans l’onglet Restream.`,
             showIf: (v) => v.service === 'restream',
           },
           { key: 'server', type: 'text', label: 'Serveur', showIf: (v) => v.service !== 'restream' },
@@ -408,17 +408,17 @@
           { key: 'videoBitrate', type: 'number', label: 'Débit vidéo (kb/s)', min: 500, max: 50000, step: 100 },
           {
             type: 'info',
-            text: '⚠ Twitch recommande 6000 kb/s maximum : au-delà, tes viewers sans transcodage risquent des saccades.',
+            text: '⚠ Twitch recommande 6 000 kb/s au maximum : au-delà, les spectateurs sans transcodage risquent des saccades.',
             showIf: (v) => v.service === 'twitch' && Number(v.videoBitrate) > 6000,
           },
           {
             type: 'info',
-            text: '⚠ Kick accepte 8000 kb/s maximum.',
+            text: '⚠ Kick accepte 8 000 kb/s au maximum.',
             showIf: (v) => v.service === 'kick' && Number(v.videoBitrate) > 8000,
           },
           {
             type: 'info',
-            text: '⚠ Avec Restream, ce débit part tel quel vers Twitch (6000 kb/s max conseillé) et Kick (8000 max).',
+            text: '⚠ Avec Restream, ce débit est transmis tel quel à Twitch (6 000 kb/s au maximum conseillés) et à Kick (8 000 kb/s au maximum).',
             showIf: (v) => v.service === 'restream' && Number(v.videoBitrate) > 6000,
           },
           { key: 'audioBitrate', type: 'select', label: 'Débit audio (kb/s)', options: [96, 128, 160, 192, 256, 320].map((v) => ({ value: v, label: String(v) })) },
@@ -435,9 +435,9 @@
       restream: {
         label: 'Restream',
         fields: [
-          { type: 'info', text: 'Ton application Restream relaie le flux vers Twitch et Kick sans réencodage, et regroupe leur chat.' },
+          { type: 'info', text: 'Votre serveur Restream relaie le flux vers Twitch et Kick sans le réencoder, et regroupe leurs chats.' },
           { key: 'url', type: 'text', label: 'Adresse de l’interface Restream', placeholder: 'http://localhost:3050' },
-          { key: 'password', type: 'password', label: 'Mot de passe (WEB_PASSWORD, si défini)' },
+          { key: 'password', type: 'password', label: 'Mot de passe de l’interface (si défini)' },
           { key: 'allowSelfSigned', type: 'checkbox', label: 'Accepter un certificat HTTPS auto-signé' },
           {
             key: 'rtmpUrl',
@@ -453,9 +453,10 @@
               const r = await window.api.restreamTest(vals);
               btn.disabled = false;
               if (!r.ok) return MS.toast(`Restream : ${r.error}`, 'error', 8000);
-              const d = Object.entries(r.status.destinations).map(([k, v]) => `${k} : ${v.status}`).join(', ');
-              if (r.rtmpError) return MS.toast(`Restream répond, mais pas son port RTMP (le streaming échouera).\n${r.rtmpError}`, 'error', 15000);
-              MS.toast(`Restream OK\nIngestion : ${r.ingest}\n${d || 'aucune destination'}`, 'success', 8000);
+              const names = { idle: 'inactive', connecting: 'connexion', live: 'en direct', error: 'erreur', stopped: 'arrêtée' };
+              const d = Object.entries(r.status.destinations).map(([k, v]) => `${MS.platformName(k)} : ${names[v.status] || v.status}`).join(', ');
+              if (r.rtmpError) return MS.toast(`Restream répond, mais son serveur RTMP est injoignable : le streaming échouera.\n${r.rtmpError}`, 'error', 15000);
+              MS.toast(`Connexion à Restream réussie.\nAdresse d’ingestion : ${r.ingest}\nDestinations : ${d || 'aucune'}`, 'success', 8000);
             },
           },
         ],
@@ -476,14 +477,14 @@
           },
           {
             type: 'info',
-            text: 'Restream regroupe Twitch et Kick via leurs API officielles (badges et emotes inclus). Pour Kick, Restream doit être joignable en HTTPS (voir son README).',
+            text: 'Restream regroupe les chats de Twitch et de Kick via leurs API officielles (badges et emotes inclus). Pour Kick, Restream doit être joignable en HTTPS (voir sa documentation).',
             showIf: (v) => v.mode === 'restream',
           },
-          { key: 'twitchChannel', type: 'text', label: 'Chaîne Twitch', placeholder: 'ex. m8_thedemon', showIf: (v) => v.mode === 'direct' },
-          { key: 'kickChannel', type: 'text', label: 'Chaîne Kick', placeholder: 'ex. m8_thedemon', showIf: (v) => v.mode === 'direct' },
+          { key: 'twitchChannel', type: 'text', label: 'Chaîne Twitch', placeholder: 'nom de la chaîne', showIf: (v) => v.mode === 'direct' },
+          { key: 'kickChannel', type: 'text', label: 'Chaîne Kick', placeholder: 'nom de la chaîne', showIf: (v) => v.mode === 'direct' },
           {
             type: 'info',
-            text: 'Kick : MyStream lit la page de chat officielle de ta chaîne (celle que Kick propose pour OBS), avec les vrais badges et emotes. Aucun compte nécessaire.',
+            text: 'Kick : MyStream lit la page de chat officielle de votre chaîne (celle que Kick fournit pour OBS), avec ses badges et emotes. Aucun compte n’est nécessaire.',
             showIf: (v) => v.mode === 'direct',
           },
         ],
@@ -587,7 +588,7 @@
       };
       forms[current] = MS.buildForm(tabs[current].fields, { ...defaults[current] }, current === 'stream' ? onStreamChange : null);
       panes[current].replaceChildren(forms[current].element);
-      MS.toast(`Onglet « ${tabs[current].label} » remis par défaut (OK pour appliquer).`, 'info', 4000);
+      MS.toast(`Valeurs par défaut rétablies dans l’onglet « ${tabs[current].label} ». Cliquez sur OK pour les appliquer.`, 'info', 5000);
     }
 
     const ok = await MS.modal({
@@ -619,7 +620,7 @@
     const fps = Number(v.fps);
     if (w !== st.video.width || h !== st.video.height || fps !== st.video.fps) {
       if (MS.outputs.isAnyActive()) {
-        MS.toast('Les paramètres vidéo ne peuvent pas changer pendant une sortie active.', 'error');
+        MS.toast('Les paramètres vidéo ne peuvent pas être modifiés pendant un streaming ou un enregistrement.', 'error', 6000);
       } else {
         Object.assign(st.video, { width: w, height: h, fps });
         MS.outputs.resetStream();
@@ -638,7 +639,7 @@
   MS.transitionSummary = function (t) {
     if (t.type === 'slide') return `Glissement ${DIRECTIONS[t.direction] || ''}`;
     if (t.type === 'stinger') {
-      if (!t.stingerFile) return 'Aucune vidéo choisie : la scène change sans effet.';
+      if (!t.stingerFile) return 'Aucune animation choisie : la scène change sans effet.';
       return `${t.stingerFile.split(/[\\/]/).pop()} · changement à ${t.stingerPoint} ms`;
     }
     return '';
@@ -658,10 +659,10 @@
       { key: 'type', label: 'Type', type: 'select', options: types.map(([value, label]) => ({ value, label: value === 'default' ? `Celle du dock Transitions (${MS.TRANSITION_LABELS[global.type]})` : label })) },
       { key: 'duration', label: 'Durée (ms)', type: 'number', min: 0, max: 10000, step: 50, showIf: (v) => custom(v) && v.type !== 'cut' && v.type !== 'stinger' },
       { key: 'direction', label: 'Direction', type: 'select', options: Object.entries(DIRECTIONS).map(([value, label]) => ({ value, label: label[0].toUpperCase() + label.slice(1) })), showIf: (v) => v.type === 'slide' },
-      { key: 'stingerFile', label: 'Vidéo du stinger', type: 'file', filters: [{ name: 'Vidéos', extensions: ['webm', 'mov', 'mp4', 'mkv'] }], showIf: (v) => v.type === 'stinger' },
-      { type: 'info', text: 'Une vidéo WebM (VP9) avec transparence passe par-dessus les scènes. Une vidéo sans transparence doit couvrir tout l’écran au moment du changement.', showIf: (v) => v.type === 'stinger' },
-      { key: 'stingerPoint', label: 'Changer de scène à (ms après le début de la vidéo)', type: 'number', min: 0, max: 20000, step: 50, showIf: (v) => v.type === 'stinger' },
-      { key: 'stingerAudio', label: 'Diffuser le son de la vidéo', type: 'checkbox', showIf: (v) => v.type === 'stinger' },
+      { key: 'stingerFile', label: 'Animation du stinger (vidéo ou GIF)', type: 'file', filters: [{ name: 'Vidéos et GIF', extensions: ['webm', 'mov', 'mp4', 'mkv', 'gif'] }], showIf: (v) => v.type === 'stinger' },
+      { type: 'info', text: 'Une vidéo WebM (VP9) ou un GIF avec transparence s’affiche par-dessus les scènes. Sans transparence, l’animation doit couvrir tout l’écran au moment du changement de scène.', showIf: (v) => v.type === 'stinger' },
+      { key: 'stingerPoint', label: 'Point de changement de scène (ms après le début)', type: 'number', min: 0, max: 20000, step: 50, showIf: (v) => v.type === 'stinger' },
+      { key: 'stingerAudio', label: 'Diffuser le son de l’animation', type: 'checkbox', showIf: (v) => v.type === 'stinger' },
     ];
     const values = { duration: 300, direction: 'left', stingerFile: '', stingerPoint: 600, stingerAudio: true, ...base };
     const form = MS.buildForm(fields, values);

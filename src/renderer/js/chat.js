@@ -10,6 +10,9 @@
     kick: 'M1.333 0h8v5.333H12V2.667h2.667V0h8v8H20v2.667h-2.667v2.666H20V16h2.667v8h-8v-2.667H12v-2.666H9.333V24h-8Z',
   };
   MS.PLATFORM_COLORS = { twitch: '#a970ff', kick: '#53fc18', restream: '#4c7dff' };
+  const PLATFORM_NAMES = { twitch: 'Twitch', kick: 'Kick', restream: 'Restream', youtube: 'YouTube' };
+  /** Nom affiché d'une plateforme (« twitch » → « Twitch »). */
+  MS.platformName = (p) => PLATFORM_NAMES[p] || String(p || '');
 
   MS.BADGE_LABELS = {
     broadcaster: 'Diffuseur',

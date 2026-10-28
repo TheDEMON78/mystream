@@ -177,7 +177,7 @@
     tick() {
       if (!this.session) return;
       this.session.sample();
-      this.render();
+      if (!document.hidden) this.render();
     },
 
     /* Barre « En direct » ------------------------------------------------ */
@@ -194,7 +194,7 @@
         lost: el('button', {
           class: 'lb-lost',
           title: 'Santé de la diffusion',
-          onclick: () => MS.toast(MS.outputs.health.message || 'Tout va bien.', 'info', 8000),
+          onclick: () => MS.toast(MS.outputs.health.message || 'Tout fonctionne normalement.', 'info', 8000),
         }),
       };
       const b = this.bar;
@@ -235,7 +235,7 @@
       this.drawSpark(s.bitrates);
 
       const pct = s.lostPercent();
-      b.lost.textContent = `${fmtInt(s.lost())} perdues · ${fmtPct(pct)}`;
+      b.lost.textContent = `${fmtInt(s.lost())} image${s.lost() > 1 ? 's' : ''} perdue${s.lost() > 1 ? 's' : ''} · ${fmtPct(pct)}`;
       b.lost.className = `lb-lost ${pct >= 5 ? 'bad' : pct >= 1 ? 'warn' : ''}`;
     },
 
@@ -437,13 +437,13 @@
       this.notice.hidden = ok;
       if (!this.configured()) {
         this.notice.replaceChildren(
-          el('p', { class: 'hint', text: 'Le titre et la catégorie passent par Restream, qui a tes comptes Twitch et Kick.' }),
+          el('p', { class: 'hint', text: 'Le titre et la catégorie se modifient via Restream, connecté à vos comptes Twitch et Kick.' }),
           el('button', { class: 'btn small', text: 'Configurer Restream…', onclick: () => MS.openSettings('restream') })
         );
         return;
       }
       if (!ok) {
-        this.notice.replaceChildren(el('p', { class: 'hint error-text', text: `Restream injoignable : ${this.error || 'pas de réponse'}` }), el('button', { class: 'btn small', text: 'Réessayer', onclick: () => this.refresh(true) }));
+        this.notice.replaceChildren(el('p', { class: 'hint error-text', text: this.error || 'Restream ne répond pas.' }), el('button', { class: 'btn small', text: 'Réessayer', onclick: () => this.refresh(true) }));
         return;
       }
       const connected = PLATFORMS.filter((p) => info[p] && info[p].connected);
@@ -451,12 +451,12 @@
         ...PLATFORMS.map((p) => {
           const i = info[p] || {};
           const label = i.connected ? (typeof i.viewerCount === 'number' ? `${fmtInt(i.viewerCount)} spectateurs` : 'hors ligne') : i.error ? 'injoignable' : 'non connecté';
-          return el('span', { class: `live-pf ${i.connected ? 'on' : ''}`, title: i.connected ? '' : "Connecte ce compte dans l'interface de Restream" }, platformIcon(p), el('span', { text: label }));
+          return el('span', { class: `live-pf ${i.connected ? 'on' : ''}`, title: i.connected ? '' : "Connectez ce compte dans l'interface de Restream." }, platformIcon(p), el('span', { text: label }));
         })
       );
       if (!connected.length) {
         this.notice.hidden = false;
-        this.notice.replaceChildren(el('p', { class: 'hint', text: "Aucun compte connecté : connecte Twitch et/ou Kick dans l'interface de Restream." }));
+        this.notice.replaceChildren(el('p', { class: 'hint', text: "Aucun compte connecté. Connectez Twitch ou Kick dans l'interface de Restream." }));
       }
       this.current = (connected[0] && info[connected[0]]) || {};
       // Ne pas écraser ce que l'utilisateur est en train de taper.
@@ -564,7 +564,7 @@
     async apply() {
       const t = this.title.value.trim();
       const changedCat = this.category.value.trim() && this.category.value.trim() !== (this.current.category || '');
-      if (changedCat && !this.chosen) return this.setFeedback('Choisis la catégorie dans la liste proposée.', true);
+      if (changedCat && !this.chosen) return this.setFeedback('Choisissez la catégorie dans la liste proposée.', true);
       if (!t && !this.chosen) return;
       this.setFeedback('Mise à jour…');
       const c = this.chosen;
@@ -579,12 +579,12 @@
       const results = Object.entries(res.data);
       const failed = results.filter(([, v]) => !v.ok);
       if (!results.length) return this.setFeedback('Aucune plateforme connectée dans Restream.', true);
-      if (failed.length) return this.setFeedback(failed.map(([p, v]) => `${p} : ${v.error}`).join(' · '), true);
+      if (failed.length) return this.setFeedback(failed.map(([p, v]) => `${MS.platformName(p)} : ${v.error}`).join(' · '), true);
       if (live.session) {
         live.session.title = t || live.session.title;
         if (c) live.session.category = c.name;
       }
-      this.setFeedback(`✓ Mis à jour sur ${results.map(([p]) => (p === 'twitch' ? 'Twitch' : 'Kick')).join(' et ')}.`);
+      this.setFeedback(`✓ Mis à jour sur ${results.map(([p]) => MS.platformName(p)).join(' et ')}.`);
       setTimeout(() => this.feedback.textContent.startsWith('✓') && this.setFeedback(''), 4000);
       this.titleDirty = false;
       this.categoryDirty = false;

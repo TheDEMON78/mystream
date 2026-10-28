@@ -181,7 +181,7 @@
           notes.push({ level: 'todo', text: `« ${obs.name} » : capture de fenêtre sans fenêtre mémorisée, convertie en capture de jeu automatique.` });
           return mk('game_capture', { captureAudio: Boolean(s.capture_audio) });
         }
-        if (game) notes.push({ level: 'info', text: `« ${obs.name} » : capture de jeu convertie en capture de la fenêtre « ${w.title || w.exe} ». Elle démarre dès que le jeu est lancé. Si l'image reste noire, passe le jeu en plein écran fenêtré (sans bordure).` });
+        if (game) notes.push({ level: 'info', text: `« ${obs.name} » : capture de jeu convertie en capture de la fenêtre « ${w.title || w.exe} ». Elle démarre dès que le jeu est lancé. Si l'image reste noire, passez le jeu en plein écran fenêtré (sans bordure).` });
         return mk('display_capture', { captureKind: 'window', captureName: w.title, captureAudio: Boolean(s.capture_audio), windowMatch: { title: w.title, exe: w.exe } });
       }
       case 'monitor_capture':
@@ -205,7 +205,7 @@
       case 'wasapi_input_capture':
       case 'pulse_input_capture':
       case 'coreaudio_input_capture':
-        if (s.device_id && s.device_id !== 'default') notes.push({ level: 'todo', text: `« ${obs.name} » : micro réglé sur le périphérique par défaut, choisis le bon dans ses propriétés.` });
+        if (s.device_id && s.device_id !== 'default') notes.push({ level: 'todo', text: `« ${obs.name} » : micro réglé sur le périphérique par défaut : choisissez le bon dans ses propriétés.` });
         return mk('audio_input', { deviceId: 'default' });
       case 'wasapi_output_capture':
       case 'pulse_output_capture':
@@ -465,7 +465,7 @@
     const stinger = transition.type === 'stinger' ? transition : (data.transitions || []).map((t) => convertTransition(t, duration)).find((t) => t.type === 'stinger');
     if (stinger) {
       stinger.stingerPoint = await resolveStingerPoint(stinger, notes);
-      if (transition.type !== 'stinger') notes.push({ level: 'info', text: `Stinger « ${stinger.name} » prêt : choisis « Stinger (vidéo) » dans le dock Transitions pour l'utiliser.` });
+      if (transition.type !== 'stinger') notes.push({ level: 'info', text: `Stinger « ${stinger.name} » prêt : choisissez « Stinger » dans le dock Transitions pour l'utiliser.` });
       Object.assign(transition, { stingerFile: stinger.stingerFile, stingerPoint: stinger.stingerPoint, stingerAudio: true });
     }
     delete transition.stingerFrame;
@@ -508,10 +508,10 @@
     const sourceCount = data.sources.filter((o) => o.id !== 'scene' && o.id !== 'group').length;
 
     const fields = [
-      { type: 'info', text: `« ${data.name || 'Collection OBS'} » : ${sceneCount} scène(s), ${sourceCount} source(s). Tes réglages MyStream (stream, chat, Restream, docks, raccourcis) ne changent pas.` },
+      { type: 'info', text: `« ${data.name || 'Collection OBS'} » : ${sceneCount} scène(s), ${sourceCount} source(s). Vos réglages MyStream (stream, chat, Restream, docks, raccourcis) ne sont pas modifiés.` },
       resDiffers ? { key: 'resolution', type: 'checkbox', label: `Passer le canevas en ${res.x}×${res.y} comme dans OBS (actuellement ${st.video.width}×${st.video.height})` } : null,
       chatWidgets.length ? { key: 'replaceChat', type: 'checkbox', label: `Remplacer ${chatWidgets.length > 1 ? 'les widgets' : 'le widget'} de chat (${chatWidgets.map((o) => o.name).join(', ')}) par la source « Chat du stream » de MyStream (Twitch + Kick)` } : null,
-      { key: 'mode', type: 'select', label: 'Mes scènes actuelles', options: [{ value: 'add', label: 'Les garder et ajouter celles d’OBS' }, { value: 'replace', label: 'Les remplacer par celles d’OBS (Ctrl+Z pour revenir)' }] },
+      { key: 'mode', type: 'select', label: 'Scènes actuelles', options: [{ value: 'add', label: 'Les garder et ajouter celles d’OBS' }, { value: 'replace', label: 'Les remplacer par celles d’OBS (Ctrl+Z pour revenir)' }] },
     ].filter(Boolean);
     const form = MS.buildForm(fields, { resolution: true, replaceChat: false, mode: 'add' });
     const ok = await MS.modal({ title: 'Importer une collection OBS', content: form.element, width: 560, buttons: [{ label: 'Annuler', value: false }, { label: 'Importer', value: true, primary: true }] });
@@ -588,7 +588,7 @@
     const content = el(
       'div',
       { class: 'import-report' },
-      el('p', { text: `${conv.scenes.length} scène(s) et ${Object.keys(conv.sources).length} source(s) importées${opt.mode === 'replace' ? ' (scènes précédentes remplacées, Ctrl+Z pour revenir)' : ', ajoutées à tes scènes'}.` }),
+      el('p', { text: `${conv.scenes.length} scène(s) et ${Object.keys(conv.sources).length} source(s) importées${opt.mode === 'replace' ? ' (scènes précédentes remplacées, Ctrl+Z pour revenir)' : ', ajoutées à vos scènes'}.` }),
       todo.length ? el('h4', { text: `À vérifier (${todo.length})` }) : null,
       todo.length ? list(todo) : null,
       el('h4', { text: 'Adaptations faites' }),

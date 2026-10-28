@@ -49,7 +49,7 @@ function request(cfg, path, timeout = 5000, body = null) {
       });
     });
     req.on('timeout', () => req.destroy(new Error('Restream ne répond pas.')));
-    req.on('error', (e) => reject(new Error(e.code === 'ECONNREFUSED' ? 'Restream est injoignable (application lancée ?).' : e.message)));
+    req.on('error', (e) => reject(new Error(e.code === 'ECONNREFUSED' ? "Restream est injoignable : vérifiez que l'application est lancée et que l'adresse est correcte." : e.message)));
     req.end(payload || undefined);
   });
 }
@@ -96,7 +96,7 @@ function checkRtmp(rtmpUrl, timeout = 5000) {
     };
     sock.setTimeout(timeout, () =>
       fail(
-        `Le serveur RTMP ${where} ne répond pas. Le port ${port} est sans doute bloqué par un pare-feu (sur un Synology : Panneau de configuration > Sécurité > Pare-feu, autorise le port ${port} en TCP), ou l'adresse n'est pas la bonne.`
+        `Le serveur RTMP ${where} ne répond pas. Le port ${port} est sans doute bloqué par un pare-feu (sur un Synology : Panneau de configuration > Sécurité > Pare-feu, autorisez le port ${port} en TCP), ou l'adresse n'est pas la bonne.`
       )
     );
     sock.once('connect', () => {

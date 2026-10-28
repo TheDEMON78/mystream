@@ -126,7 +126,7 @@
     async apply() {
       const map = MS.store.settings.ui.hotkeys || {};
       const failed = await window.api.setHotkeys(map);
-      if (failed.length) MS.toast(`Raccourcis déjà utilisés par une autre application : ${failed.join(', ')}`, 'error', 8000);
+      if (failed.length) MS.toast(`Ces raccourcis sont déjà utilisés par une autre application : ${failed.join(', ')}`, 'error', 8000);
     },
 
     run(action) {
@@ -213,9 +213,9 @@
     };
     const form = MS.buildForm(
       [
-        { type: 'info', text: 'Réglages appliqués en direct : parle dans le micro en regardant le VU-mètre.' },
-        { key: 'gain', type: 'range', label: 'Gain (dB) : monte un micro trop faible', min: -20, max: 30 },
-        { type: 'section', label: 'Noise gate (coupe le bruit de fond quand tu ne parles pas)' },
+        { type: 'info', text: 'Les réglages s’appliquent en direct : parlez dans le micro en surveillant le VU-mètre.' },
+        { key: 'gain', type: 'range', label: 'Gain (dB) : augmente le niveau d’un micro trop faible', min: -20, max: 30 },
+        { type: 'section', label: 'Noise gate (coupe le bruit de fond quand vous ne parlez pas)' },
         { key: 'gate', type: 'checkbox', label: 'Activer' },
         { key: 'gateThreshold', type: 'range', label: 'Seuil (dB) : sous ce niveau, le micro est coupé', min: -80, max: 0, showIf: (v) => v.gate },
         { key: 'gateRelease', type: 'range', label: 'Fermeture (ms)', min: 20, max: 1000, showIf: (v) => v.gate },
@@ -264,7 +264,7 @@
     if (!Array.isArray(data.scenes) || !data.scenes.length || typeof data.sources !== 'object') {
       return MS.toast("Ce fichier n'est pas une collection de scènes MyStream.", 'error', 8000);
     }
-    const ok = await MS.confirm('Remplacer les scènes', `Remplacer tes scènes actuelles par les ${data.scenes.length} scène(s) de ce fichier ? (Ctrl+Z pour revenir en arrière)`, 'Remplacer');
+    const ok = await MS.confirm('Remplacer les scènes', `Remplacer vos scènes actuelles par les ${data.scenes.length} scène(s) de ce fichier ? Vous pourrez revenir en arrière avec Ctrl+Z.`, 'Remplacer');
     if (!ok) return;
     MS.history.replaceAll(data.scenes, data.sources);
     MS.syncGlobalAudio();
@@ -302,7 +302,7 @@
         {
           key: 'usage',
           type: 'select',
-          label: 'Que veux-tu faire ?',
+          label: 'Que souhaitez-vous faire ?',
           options: [
             { value: 'stream', label: 'Streamer (et enregistrer)' },
             { value: 'record', label: 'Enregistrer uniquement' },
@@ -314,7 +314,7 @@
         {
           key: 'quality',
           type: 'select',
-          label: `Qualité (recommandé pour ton PC : ${recommended})`,
+          label: `Qualité (recommandée pour ce PC : ${recommended})`,
           options: Object.entries(QUALITIES).map(([value, q]) => ({ value, label: q.label })),
         },
         { key: 'mic', type: 'select', label: 'Micro', options: mics },

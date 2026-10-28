@@ -12,7 +12,7 @@ let win = null;
 let current = null;
 let retry = null;
 
-/** « m8_thedemon », « kick.com/m8_thedemon » → « m8-thedemon » (format des adresses Kick). */
+/** « ma_chaine », « kick.com/ma_chaine » → « ma-chaine » (format des adresses Kick). */
 function slugify(channel) {
   return String(channel || '')
     .trim()

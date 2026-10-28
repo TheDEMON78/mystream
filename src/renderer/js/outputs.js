@@ -4,6 +4,7 @@
   const MS = window.MS;
 
   const LABELS = { record: "l'enregistrement", stream: 'le streaming' };
+  const NAMES = { record: "L'enregistrement", stream: 'Le streaming' };
 
   function pickMime(kind) {
     const fmt = MS.store.settings.output.format;
@@ -32,8 +33,10 @@
       this.file = res.file;
       this.encoder = res.encoder;
 
-      // Le flux de streaming est réencodé par FFmpeg : on lui envoie une source de haute qualité.
-      const vb = this.kind === 'record' ? settings.output.videoBitrate : Math.max(settings.stream.videoBitrate * 2, 8000);
+      // Le flux de streaming est réencodé par FFmpeg : on lui envoie une source
+      // trois fois plus riche que le débit final, pour que ce second encodage
+      // ne dégrade presque pas l'image (le flux reste local, sa taille ne coûte rien).
+      const vb = this.kind === 'record' ? settings.output.videoBitrate : MS.clamp(settings.stream.videoBitrate * 3, 12000, 60000);
       const ab = this.kind === 'record' ? settings.output.audioBitrate : settings.stream.audioBitrate;
       // Une image clé toutes les 2 s : indispensable pour que l'enregistrement
       // reste lisible après une coupure et pour la navigation dans la vidéo.
@@ -120,8 +123,8 @@
       try {
         if (kind === 'record') {
           const free = await window.api.diskFree(MS.store.settings.output.recordPath);
-          if (free != null && free < DISK_STOP) throw new Error(`espace disque insuffisant (${formatBytes(free)} libres)`);
-          if (free != null && free < DISK_WARN) MS.toast(`Attention : seulement ${formatBytes(free)} libres sur le disque d'enregistrement.`, 'error', 8000);
+          if (free != null && free < DISK_STOP) throw new Error(`espace disque insuffisant (${formatBytes(free)} disponibles)`);
+          if (free != null && free < DISK_WARN) MS.toast(`Attention : il ne reste que ${formatBytes(free)} sur le disque d'enregistrement.`, 'error', 8000);
         }
         const out = new Output(kind);
         try {
@@ -134,7 +137,7 @@
         if (kind === 'record') MS.toast(`Enregistrement démarré : ${out.file}`, 'info', 3500);
         else {
           const enc = (MS.encoders.find((e) => e.id === out.encoder) || { label: out.encoder }).label;
-          MS.toast(`Streaming démarré · encodeur ${enc}`, 'info', 3500);
+          MS.toast(`Streaming démarré (encodeur : ${enc}).`, 'info', 3500);
         }
       } catch (e) {
         MS.toast(`Impossible de démarrer ${LABELS[kind]} : ${e.message}`, 'error', 8000);
@@ -160,7 +163,7 @@
       MS.emit('outputs:changed');
       if (kind === 'record') {
         if (res.ok) MS.toast(`Enregistrement sauvegardé : ${res.file}`, 'success', 6000);
-        else MS.toast(`Erreur d'enregistrement : ${res.error}`, 'error', 10000);
+        else MS.toast(`L'enregistrement a échoué : ${res.error}`, 'error', 10000);
       }
     },
 
@@ -176,7 +179,7 @@
         this.active[kind] = null;
         window.api.log('error', `${kind} interrompu : ${error}`);
         if (kind === 'stream') this.scheduleReconnect(out, error);
-        else MS.toast(`Arrêt de ${LABELS[kind]} : ${error || 'erreur inconnue'}`, 'error', 12000);
+        else MS.toast(`${NAMES[kind]} s'est arrêté : ${error || 'erreur inconnue'}`, 'error', 12000);
         MS.emit('outputs:changed');
       }
     },
@@ -195,7 +198,7 @@
         MS.toast(`Streaming arrêté après ${RECONNECT_RETRIES} tentatives de reconnexion : ${error || 'erreur inconnue'}`, 'error', 15000);
         return;
       }
-      MS.toast(`Connexion au serveur perdue (${error || 'erreur inconnue'}). Reconnexion dans ${RECONNECT_DELAY} s (${attempt}/${RECONNECT_RETRIES})…`, 'error', 8000);
+      MS.toast(`Connexion au serveur perdue (${error || 'erreur inconnue'}). Nouvel essai dans ${RECONNECT_DELAY} s (${attempt} sur ${RECONNECT_RETRIES})…`, 'error', 8000);
       const r = { attempt, liveStart, error };
       r.timer = setTimeout(async () => {
         if (this.reconnect !== r) return;
@@ -228,24 +231,24 @@
       const lagged = stats.lagged - (this.lastLagged ?? stats.lagged);
       this.lastLagged = stats.lagged;
       let level = 'good';
-      let message = 'Tout va bien.';
+      let message = 'Tout fonctionne normalement.';
       const fps = MS.store.settings.video.fps;
       // Deux relevés consécutifs au-delà de 10 % : on ignore les à-coups ponctuels (démarrage…).
       this.lagStreak = lagged > fps * 0.2 ? (this.lagStreak || 0) + 1 : 0;
       if (this.lagStreak >= 2) {
         level = 'warn';
-        message = `Rendu surchargé (${lagged} images manquées en 2 s) : réduis la résolution ou les FPS, ou retire des sources lourdes (pages web animées, captures multiples).`;
+        message = `Rendu surchargé (${lagged} images manquées en 2 s) : réduisez la résolution ou le nombre d'images par seconde, ou retirez des sources lourdes (pages web animées, captures multiples).`;
       }
       if (stream && stream.progress && stream.progress.speed) {
         stream.slow = stream.progress.speed < 0.93 ? (stream.slow || 0) + 1 : 0;
         if (stream.slow >= 3) {
           level = 'bad';
-          message = `Encodeur ou connexion saturés (vitesse ${stream.progress.speed.toFixed(2)}×) : baisse le débit vidéo, choisis un encodeur matériel (NVENC…) ou vérifie ta connexion.`;
+          message = `Encodeur ou connexion saturés (vitesse ${stream.progress.speed.toFixed(2)}×) : baissez le débit vidéo, choisissez un encodeur matériel (NVENC…) ou vérifiez votre connexion.`;
         }
       }
       if (this.reconnect) {
         level = 'bad';
-        message = `Reconnexion en cours (${this.reconnect.attempt}/${RECONNECT_RETRIES}) : ${this.reconnect.error || ''}`;
+        message = `Reconnexion en cours (essai ${this.reconnect.attempt} sur ${RECONNECT_RETRIES})${this.reconnect.error ? ` : ${this.reconnect.error}` : '.'}`;
       }
       if (!this.isAnyActive() && level === 'good') level = 'idle';
       const changed = level !== this.health.level || message !== this.health.message;
@@ -263,7 +266,7 @@
       const free = await window.api.diskFree(MS.store.settings.output.recordPath);
       if (free == null) return;
       if (free < DISK_STOP) {
-        MS.toast(`Disque presque plein (${formatBytes(free)}) : enregistrement arrêté pour protéger le fichier.`, 'error', 15000);
+        MS.toast(`Disque presque plein (${formatBytes(free)} disponibles) : l'enregistrement a été arrêté pour protéger le fichier.`, 'error', 15000);
         this.stop('record');
       } else if (free < DISK_WARN && !this.diskWarned) {
         this.diskWarned = true;

@@ -103,8 +103,8 @@
           const want = s.deviceLabel.toLowerCase();
           const found = devices.find((d) => d.label.toLowerCase() === want) || devices.find((d) => d.label && (d.label.toLowerCase().includes(want) || want.includes(d.label.toLowerCase().replace(/\s*\(.*\)$/, ''))));
           if (found) s.deviceId = found.deviceId;
-          else if (devices.length && !devices[0].label) throw new Error("Autorise l'accès à la caméra pour retrouver « " + s.deviceLabel + ' »');
-          else throw new Error(`Caméra « ${s.deviceLabel} » introuvable (branchée ?)`);
+          else if (devices.length && !devices[0].label) throw new Error(`Autorisez l'accès à la caméra pour retrouver « ${s.deviceLabel} ».`);
+          else throw new Error(`Caméra « ${s.deviceLabel} » introuvable : vérifiez qu'elle est branchée.`);
         }
       }
       if (s.deviceId) video.deviceId = { exact: s.deviceId };
@@ -230,7 +230,7 @@
    */
   class GameCaptureRuntime extends BaseRuntime {
     async start() {
-      if (!MS.appInfo.windowAudio) return this.fail(new Error('Disponible sous Windows 10 (2004) ou plus récent'));
+      if (!MS.appInfo.windowAudio) return this.fail(new Error('Nécessite Windows 10 version 2004 ou plus récent'));
       this.onGame = (g) => this.setGame(g);
       MS.on('game:changed', this.onGame);
       window.api.gameWatch(this.src.id, true);
@@ -320,7 +320,7 @@
    */
   class AppAudioRuntime extends BaseRuntime {
     async start() {
-      if (!MS.appInfo.windowAudio) return this.fail(new Error("Disponible sous Windows 10 (2004) ou plus récent"));
+      if (!MS.appInfo.windowAudio) return this.fail(new Error('Nécessite Windows 10 version 2004 ou plus récent'));
       const s = this.src.settings;
       try {
         const list = await window.api.getCaptureSources(false);
@@ -559,8 +559,16 @@
           this.update();
         }, 50);
       };
-      for (const evt of ['chat:message', 'chat:cleared', 'chat:image']) MS.on(evt, this.onMessage);
-      this.timer = setInterval(() => this.src.settings.lifetime > 0 && this.update(), 250);
+      // Une emote qui finit de charger change la largeur des messages : mise en page à refaire.
+      this.onImage = () => {
+        this.layouts = new WeakMap();
+        this.onMessage();
+      };
+      MS.on('chat:message', this.onMessage);
+      MS.on('chat:cleared', this.onMessage);
+      MS.on('chat:image', this.onImage);
+      // Messages éphémères : on ne redessine que pendant un fondu de disparition.
+      this.timer = setInterval(() => this.src.settings.lifetime > 0 && Date.now() >= this.nextFade && this.update(), 100);
     }
 
     update() {
@@ -584,6 +592,13 @@
       const font = (bold) => `${bold ? '700' : '400'} ${size}px "${s.font}", sans-serif`;
       const now = Date.now();
       const life = (Number(s.lifetime) || 0) * 1000;
+      this.nextFade = Infinity;
+      // Mise en page de chaque message gardée tant que l'apparence ne change pas.
+      const key = [W, size, s.font, s.showIcons, s.showBadges, s.textColor, s.nameColor].join('|');
+      if (key !== this.layoutKey || !this.layouts) {
+        this.layoutKey = key;
+        this.layouts = new WeakMap();
+      }
 
       let y = H - pad;
       const msgs = MS.chat ? MS.chat.messages : [];
@@ -595,8 +610,10 @@
           const age = now - m.at;
           if (!m.at || age > life) continue;
           alpha = Math.min(1, (life - age) / 1000);
+          this.nextFade = Math.min(this.nextFade, m.at + life - 1000);
         }
-        const rows = this.layout(ctx, m, W - pad * 2, size, font);
+        let rows = this.layouts.get(m);
+        if (!rows) this.layouts.set(m, (rows = this.layout(ctx, m, W - pad * 2, size, font)));
         if (y - rows.length * lineH < 0) break; // pas de message coupé en haut
         y -= rows.length * lineH;
         ctx.globalAlpha = alpha;
@@ -613,7 +630,7 @@
       const s = this.src.settings;
       const tokens = [];
       if (m.system) {
-        tokens.push({ kind: 'text', text: `[${m.platform}]`, color: '#9aa0b4', bold: true });
+        tokens.push({ kind: 'text', text: `[${MS.platformName(m.platform)}]`, color: '#9aa0b4', bold: true });
       } else {
         if (s.showIcons && MS.PLATFORM_ICONS[m.platform]) tokens.push({ kind: 'icon', platform: m.platform, w: size });
         if (s.showBadges) {
@@ -669,7 +686,7 @@
         ctx.translate(x, cy - size / 2);
         ctx.scale(size / 24, size / 24);
         ctx.fillStyle = MS.PLATFORM_COLORS[t.platform];
-        ctx.fill(new Path2D(MS.PLATFORM_ICONS[t.platform]));
+        ctx.fill(path2d(MS.PLATFORM_ICONS[t.platform]));
         ctx.restore();
       } else if (t.kind === 'img') {
         const img = MS.chatImage(t.url);
@@ -688,7 +705,7 @@
         ctx.lineWidth = 2;
         ctx.lineJoin = 'round';
         ctx.lineCap = 'round';
-        ctx.stroke(new Path2D(ic.d));
+        ctx.stroke(path2d(ic.d));
         ctx.restore();
       } else if (t.kind === 'badge') {
         const h = size * 0.85;
@@ -719,8 +736,18 @@
       super.dispose();
       clearInterval(this.timer);
       clearTimeout(this.pending);
-      for (const evt of ['chat:message', 'chat:cleared', 'chat:image']) MS.off(evt, this.onMessage);
+      MS.off('chat:message', this.onMessage);
+      MS.off('chat:cleared', this.onMessage);
+      MS.off('chat:image', this.onImage);
     }
+  }
+
+  /** Tracés des logos et badges, analysés une seule fois. */
+  const paths2d = new Map();
+  function path2d(d) {
+    let p = paths2d.get(d);
+    if (!p) paths2d.set(d, (p = new Path2D(d)));
+    return p;
   }
 
   /** Page web rendue hors écran par le processus principal. */
@@ -822,7 +849,7 @@
       defaults: () => ({ captureAudio: true }),
       create: (src) => new GameCaptureRuntime(src),
       fields: () => [
-        { type: 'info', text: "Rien à choisir : MyStream capture tout seul le jeu ou l'application en plein écran ou en fenêtré sans bordure, avec son son. Lance ton jeu, il apparaît. Il reste capturé pendant un alt-tab, jusqu'à ce qu'il se ferme ou qu'une autre application passe en plein écran." },
+        { type: 'info', text: "Aucun réglage nécessaire : MyStream détecte le jeu ou l'application affiché en plein écran ou en fenêtré sans bordure, et capture aussi son son. Lancez votre jeu, il apparaît automatiquement. Il reste capturé pendant un Alt+Tab, jusqu'à sa fermeture ou jusqu'à ce qu'une autre application passe en plein écran." },
         { key: 'captureAudio', type: 'checkbox', label: 'Capturer le son du jeu' },
       ],
     },
@@ -834,8 +861,8 @@
       fields: () => [
         { key: 'capture', type: 'capture', label: 'Écran ou fenêtre' },
         MS.appInfo.windowAudio
-          ? { key: 'captureAudio', type: 'checkbox', label: 'Capturer le son (fenêtre : son de l’application · écran : son du PC, sans MyStream)' }
-          : { type: 'info', text: 'Le son de la fenêtre se capture sous Windows 10 (version 2004) ou plus récent.' },
+          ? { key: 'captureAudio', type: 'checkbox', label: 'Capturer le son (fenêtre : son de l’application ; écran : son du PC, hors MyStream)' }
+          : { type: 'info', text: 'La capture du son d’une fenêtre nécessite Windows 10 version 2004 ou plus récent.' },
       ],
     },
     video_capture: {
@@ -887,7 +914,7 @@
       audioOnly: true,
       defaults: () => ({}),
       create: (src) => new DesktopAudioRuntime(src),
-      fields: () => [{ type: 'info', text: 'Capture le son de tout le système. Disponible sous Windows.' }],
+      fields: () => [{ type: 'info', text: 'Capture tout le son du PC. Disponible uniquement sous Windows.' }],
     },
     app_audio: {
       label: "Capture audio d'application",
@@ -896,7 +923,7 @@
       defaults: () => ({ captureId: '', captureName: '', captureKind: 'window' }),
       create: (src) => new AppAudioRuntime(src),
       fields: () => [
-        { type: 'info', text: "Seul le son de cette application est capturé (Discord, navigateur, Spotify…), sans l'image. Si elle est fermée, MyStream la retrouve dès qu'elle se relance." },
+        { type: 'info', text: "Seul le son de cette application est capturé (Discord, navigateur, Spotify…), sans l'image. Si elle est fermée, MyStream la retrouve dès qu'elle redémarre." },
         { key: 'capture', type: 'capture', label: 'Application', kinds: ['window'] },
       ],
     },
@@ -987,12 +1014,12 @@
         { key: 'font', type: 'select', label: 'Police', options: FONTS.map((f) => ({ value: f, label: f })) },
         { key: 'fontSize', type: 'number', label: 'Taille du texte', min: 8, max: 96 },
         { key: 'textColor', type: 'color', label: 'Couleur du texte' },
-        { key: 'nameColor', type: 'color', label: 'Couleur des pseudos (si aucune)' },
+        { key: 'nameColor', type: 'color', label: 'Couleur des pseudos (si la plateforme n’en fournit pas)' },
         { key: 'bgColor', type: 'color', label: 'Couleur de fond' },
         { key: 'bgOpacity', type: 'range', label: 'Opacité du fond (%)', min: 0, max: 100 },
-        { key: 'lifetime', type: 'number', label: 'Masquer les messages après (s, 0 = jamais)', min: 0, max: 3600 },
+        { key: 'lifetime', type: 'number', label: 'Masquer les messages après (secondes, 0 = jamais)', min: 0, max: 3600 },
         { key: 'showIcons', type: 'checkbox', label: 'Logo de la plateforme' },
-        { key: 'showBadges', type: 'checkbox', label: 'Badges (modo, abonné…)' },
+        { key: 'showBadges', type: 'checkbox', label: 'Badges (modérateur, abonné…)' },
         { key: 'showSystem', type: 'checkbox', label: 'Messages système' },
         { key: 'shadow', type: 'checkbox', label: 'Contour du texte' },
       ],

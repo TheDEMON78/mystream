@@ -65,8 +65,8 @@
         },
         'scene-remove': async () => {
           const scene = store().editScene();
-          if (store().data.scenes.length <= 1) return MS.toast('Il doit rester au moins une scène.', 'error');
-          if (await MS.confirm('Supprimer la scène', `Supprimer « ${scene.name} » ?`, 'Supprimer')) store().removeScene(scene.id);
+          if (store().data.scenes.length <= 1) return MS.toast('Impossible de supprimer la dernière scène : il doit en rester au moins une.', 'error');
+          if (await MS.confirm('Supprimer la scène', `Voulez-vous vraiment supprimer la scène « ${scene.name} » ?`, 'Supprimer')) store().removeScene(scene.id);
         },
         'scene-up': () => store().moveScene(store().editScene().id, -1),
         'scene-down': () => store().moveScene(store().editScene().id, 1),
@@ -112,7 +112,7 @@
 
     async removeItem(item) {
       const src = store().source(item.sourceId);
-      const ok = await MS.confirm('Supprimer la source', `Supprimer « ${src ? src.name : 'source'} » de la scène ?`, 'Supprimer');
+      const ok = await MS.confirm('Retirer la source', `Retirer « ${src ? src.name : 'cette source'} » de la scène ?`, 'Retirer');
       if (!ok) return;
       MS.preview.select(null);
       store().removeItem(store().editScene().id, item.id);
@@ -299,15 +299,19 @@
         ...entries.map((e) =>
           e.separator
             ? el('div', { class: 'sep' })
-            : el('button', {
-                class: 'menu-item',
-                text: e.label,
-                disabled: Boolean(e.disabled),
-                onclick: () => {
-                  this.hideMenu();
-                  e.action && e.action();
+            : el(
+                'button',
+                {
+                  class: 'menu-item',
+                  disabled: Boolean(e.disabled),
+                  onclick: () => {
+                    this.hideMenu();
+                    e.action && e.action();
+                  },
                 },
-              })
+                e.label,
+                e.shortcut ? el('kbd', { text: e.shortcut }) : null
+              )
         )
       );
       m.classList.remove('hidden');
@@ -325,7 +329,7 @@
     renderMixer() {
       const list = MS.audio.mixerSources();
       if (!list.length) {
-        this.mixer.replaceChildren(el('div', { class: 'empty', text: 'Aucune source audio.' }));
+        this.mixer.replaceChildren(el('div', { class: 'empty', text: 'Aucune source audio dans cette scène.' }));
         return;
       }
       this.mixer.replaceChildren(
@@ -348,7 +352,7 @@
             'button',
             {
               class: `icon-btn ${src.muted ? 'danger' : ''}`,
-              title: 'Muet',
+              title: src.muted ? 'Rétablir le son' : 'Couper le son',
               onclick: () => {
                 src.muted = !src.muted;
                 MS.audio.updateGains();
@@ -362,7 +366,7 @@
             'button',
             {
               class: `icon-btn ${src.monitor ? 'on' : 'off'}`,
-              title: 'Écouter (monitoring)',
+              title: 'Écouter dans le casque (monitoring)',
               onclick: () => {
                 src.monitor = !src.monitor;
                 MS.audio.updateGains();
@@ -398,7 +402,7 @@
               'div',
               { class: 'channel-head' },
               el('span', { class: 'name', text: src.name }),
-              el('span', { class: 'clip', text: 'SATURE' }),
+              el('span', { class: 'clip', text: 'SATURÉ', title: 'Le son sature : baissez le volume de cette source' }),
               hasAudioFx(src) ? el('span', { class: 'fx', text: 'FX', title: 'Filtres audio actifs' }) : null,
               db
             ),
@@ -417,23 +421,39 @@
      */
     meterLoop() {
       const holds = new Map();
+      // Éléments des voies mis en cache : rien n'est recherché dans la page à chaque image.
+      let channels = [];
+      let source = null;
       setInterval(() => {
-        if (MS.$('#dock-mixer').hidden) return;
+        if (document.hidden || MS.$('#dock-mixer').hidden) return;
+        if (source !== this.mixer.firstChild) {
+          source = this.mixer.firstChild;
+          channels = [...this.mixer.querySelectorAll('.channel')].map((ch) => ({
+            ch,
+            id: ch.dataset.id,
+            cover: ch.querySelector('.meter-cover'),
+            peak: ch.querySelector('.meter-peak'),
+            last: {},
+          }));
+        }
         const now = performance.now();
-        for (const ch of this.mixer.querySelectorAll('.channel')) {
-          const id = ch.dataset.id;
-          const db = MS.audio.level(id);
+        for (const c of channels) {
+          const db = MS.audio.level(c.id);
           const level = Number.isFinite(db) ? dbPos(db) : 0;
-          ch.querySelector('.meter-cover').style.transform = `scaleX(${1 - level})`;
-          let h = holds.get(id);
+          let h = holds.get(c.id);
           if (!h || level >= h.level) h = { level, at: now, clipUntil: h ? h.clipUntil : 0 };
           else if (now - h.at > 1500) h.level = Math.max(level, h.level - 0.012);
           if (Number.isFinite(db) && db >= -0.5) h.clipUntil = now + 3000;
-          holds.set(id, h);
-          const peak = ch.querySelector('.meter-peak');
-          peak.style.left = `calc(${h.level * 100}% - 2px)`;
-          peak.style.opacity = h.level > 0.01 ? '1' : '0';
-          ch.classList.toggle('clipping', h.clipUntil > now);
+          holds.set(c.id, h);
+          // On ne touche au style que s'il change (une voie silencieuse ne coûte rien).
+          const cover = `scaleX(${(1 - level).toFixed(3)})`;
+          const peak = `calc(${(h.level * 100).toFixed(1)}% - 2px)`;
+          const opacity = h.level > 0.01 ? '1' : '0';
+          const clip = h.clipUntil > now;
+          if (c.last.cover !== cover) c.cover.style.transform = c.last.cover = cover;
+          if (c.last.peak !== peak) c.peak.style.left = c.last.peak = peak;
+          if (c.last.opacity !== opacity) c.peak.style.opacity = c.last.opacity = opacity;
+          if (c.last.clip !== clip) c.ch.classList.toggle('clipping', (c.last.clip = clip));
         }
       }, 33);
     },
@@ -481,7 +501,7 @@
       setBtn('#btn-stream', 'stream', 'Arrêter le streaming', 'Démarrer le streaming');
       if (o.reconnect) {
         const b = MS.$('#btn-stream');
-        b.textContent = `Reconnexion ${o.reconnect.attempt}… (cliquer pour arrêter)`;
+        b.textContent = `Reconnexion (essai ${o.reconnect.attempt})… Cliquer pour arrêter`;
         b.classList.add('live');
       }
       setBtn('#btn-record', 'record', "Arrêter l'enregistrement", "Démarrer l'enregistrement");
@@ -499,11 +519,11 @@
     /* Chat ----------------------------------------------------------------- */
     chatLine(m) {
       if (m.divider) return el('div', { class: 'chat-divider', text: m.message });
-      if (m.system) return el('div', { class: 'chat-line chat-system', text: `[${m.platform}] ${m.message}` });
+      if (m.system) return el('div', { class: 'chat-line chat-system', text: `[${MS.platformName(m.platform)}] ${m.message}` });
       const icon = MS.PLATFORM_ICONS[m.platform]
         ? el('span', {
             class: `chat-icon ${m.platform}`,
-            title: m.platform,
+            title: MS.platformName(m.platform),
             html: `<svg viewBox="0 0 24 24"><path d="${MS.PLATFORM_ICONS[m.platform]}"/></svg>`,
           })
         : null;
@@ -557,13 +577,13 @@
         return;
       }
       const labels = { connected: 'connecté', connecting: 'connexion…', error: 'erreur' };
+      const name = MS.platformName;
       const entries = Object.entries(MS.chat.status);
       const chips = (entries.length ? entries : [[mode, { status: 'connecting' }]]).map(([p, st]) =>
-        el('span', { class: `chip ${st.status}`, title: st.error || '', text: `${p} : ${labels[st.status] || st.status}` })
+        el('span', { class: `chip ${st.status}`, title: st.error || '', text: `${name(p)} : ${labels[st.status] || st.status}` })
       );
-      const errors = entries.filter(([, st]) => st.status === 'error' && st.error).map(([p, st]) => el('div', { class: 'chat-error', text: `${p} : ${st.error}` }));
-      const hint = null;
-      box.replaceChildren(...chips, ...errors, hint || '');
+      const errors = entries.filter(([, st]) => st.status === 'error' && st.error).map(([p, st]) => el('div', { class: 'chat-error', text: `${name(p)} : ${st.error}` }));
+      box.replaceChildren(...chips, ...errors);
     },
 
     /* Menus et docks ------------------------------------------------------- */
@@ -592,10 +612,10 @@
           { label: 'Quitter', action: () => window.close() },
         ],
         edit: [
-          { label: 'Annuler                      Ctrl+Z', action: () => MS.history.undo() },
-          { label: 'Rétablir                      Ctrl+Y', action: () => MS.history.redo() },
+          { label: 'Annuler', shortcut: 'Ctrl+Z', action: () => MS.history.undo() },
+          { label: 'Rétablir', shortcut: 'Ctrl+Y', action: () => MS.history.redo() },
           { separator: true },
-          { label: 'Modifier la transformation   Ctrl+E', disabled: !MS.preview.selectedItem(), action: () => MS.openTransform(MS.preview.selectedItem()) },
+          { label: 'Modifier la transformation…', shortcut: 'Ctrl+E', disabled: !MS.preview.selectedItem(), action: () => MS.openTransform(MS.preview.selectedItem()) },
           { label: 'Dupliquer la scène', action: () => this.duplicateScene(store().editScene().id) },
         ],
         view: [
@@ -618,7 +638,7 @@
           { label: "Copier le diagnostic d'affichage", action: () => this.copyLayoutDiagnostic() },
           { separator: true },
           { label: 'Page du projet (GitHub)', action: () => window.api.openExternal('https://github.com/TheDEMON78/mystream') },
-          { label: 'Nouveautés (releases)', action: () => window.api.openExternal('https://github.com/TheDEMON78/mystream/releases') },
+          { label: 'Notes de version', action: () => window.api.openExternal('https://github.com/TheDEMON78/mystream/releases') },
           { separator: true },
           { label: `MyStream v${MS.appInfo.version} — BloopStudio`, disabled: true },
         ],
@@ -653,8 +673,8 @@
       };
       const text = JSON.stringify(diag);
       window.api.copyText(text).then(
-        () => MS.toast("Diagnostic d'affichage copié : colle-le dans ton message.", 'success', 5000),
-        () => MS.toast('Copie impossible.', 'error')
+        () => MS.toast("Diagnostic d'affichage copié dans le presse-papiers : collez-le dans votre message.", 'success', 5000),
+        () => MS.toast('Impossible de copier le diagnostic dans le presse-papiers.', 'error')
       );
     },
 
@@ -673,7 +693,7 @@
     initUpdates() {
       const badge = MS.$('#update-badge');
       badge.addEventListener('click', () => {
-        if (MS.outputs.isAnyActive()) return MS.toast("La mise à jour s'installera après le live ou l'enregistrement : arrête-les d'abord.", 'info', 6000);
+        if (MS.outputs.isAnyActive()) return MS.toast("Arrêtez le streaming et l'enregistrement avant d'installer la mise à jour.", 'info', 6000);
         window.api.updateInstall();
       });
       // Les mises à jour attendent la fin des lives et des enregistrements.
@@ -682,8 +702,8 @@
         const texts = {
           downloading: `Mise à jour v${st.version} : téléchargement ${st.percent || 0} %`,
           ready: `Redémarrer pour installer la v${st.version}`,
-          available: `Nouvelle version v${st.version} : télécharger`,
-          waiting: `Mise à jour v${st.version} : après le live`,
+          available: `Télécharger la v${st.version}`,
+          waiting: `v${st.version} : téléchargement après le live`,
         };
         badge.hidden = !texts[st.status];
         badge.textContent = texts[st.status] || '';
@@ -692,7 +712,7 @@
         if (this.manualCheck && ['latest', 'error', 'available', 'downloading', 'deferred', 'waiting'].includes(st.status)) {
           this.manualCheck = false;
           if (st.status === 'latest') MS.toast('MyStream est à jour.', 'success');
-          else if (st.status === 'waiting') MS.toast(`La v${st.version} est prête à être téléchargée : ce sera fait une minute après la fin du live ou de l’enregistrement.`, 'info', 6000);
+          else if (st.status === 'waiting') MS.toast(`La v${st.version} est disponible : elle sera téléchargée une minute après la fin du live ou de l’enregistrement.`, 'info', 6000);
           else if (st.status === 'deferred') MS.toast('Recherche reportée : elle se fera une minute après la fin du live ou de l’enregistrement.', 'info', 6000);
           else if (st.status === 'error') MS.toast(`Mise à jour impossible : ${st.error}`, 'error', 8000);
         }
@@ -718,10 +738,11 @@
         health.className = `health ${h.level}`;
         health.title = h.message;
       });
-      health.addEventListener('click', () => MS.toast(MS.outputs.health.message || 'Aucune sortie active.', 'info', 8000));
+      health.addEventListener('click', () => MS.toast(MS.outputs.health.message || 'Aucun streaming ni enregistrement en cours.', 'info', 8000));
       const rs = MS.$('#status-restream');
       let cpu = null;
       const pollRestream = async () => {
+        if (document.hidden) return;
         const st = store().settings;
         if (st.stream.service !== 'restream') {
           rs.hidden = true;
@@ -736,17 +757,18 @@
           return;
         }
         const names = { idle: 'inactif', connecting: 'connexion', live: 'en direct', error: 'erreur', stopped: 'arrêté' };
-        const dests = Object.entries(r.status.destinations).map(([k, d]) => `${k} ${names[d.status] || d.status}`);
+        const dests = Object.entries(r.status.destinations).map(([k, d]) => `${MS.platformName(k)} ${names[d.status] || d.status}`);
         rs.className = `badge ${Object.values(r.status.destinations).some((d) => d.status === 'live') ? 'on' : ''}`;
         rs.textContent = `Restream · ${r.status.obsConnected ? 'flux reçu' : 'en attente du flux'}${dests.length ? ` · ${dests.join(' · ')}` : ''}`;
         rs.title = Object.entries(r.status.destinations)
           .filter(([, d]) => d.failureReason)
-          .map(([k, d]) => `${k} : ${d.failureReason}`)
+          .map(([k, d]) => `${MS.platformName(k)} : ${d.failureReason}`)
           .join('\n');
       };
       pollRestream();
       setInterval(pollRestream, 4000);
       setInterval(async () => {
+        if (document.hidden) return;
         try {
           cpu = await window.api.stats();
         } catch {
@@ -754,6 +776,7 @@
         }
       }, 2000);
       setInterval(() => {
+        if (document.hidden) return;
         const { stream, record } = MS.outputs.active;
         const now = performance.now();
         const rc = MS.outputs.reconnect;
@@ -767,7 +790,7 @@
         perf.textContent = cpu ? `CPU ${cpu.cpu.toFixed(1)} % · ${Math.round(cpu.memMB)} Mo` : '';
         const s = MS.compositor.stats;
         const target = store().settings.video.fps;
-        fps.textContent = `${s.fps.toFixed(1)} / ${target} FPS · rendu ${s.renderMs.toFixed(1)} ms · images manquées ${s.lagged}`;
+        fps.textContent = `${s.fps.toFixed(1)} / ${target} i/s · rendu ${s.renderMs.toFixed(1)} ms · ${s.lagged} image${s.lagged > 1 ? 's' : ''} manquée${s.lagged > 1 ? 's' : ''}`;
       }, 500);
     },
   };

@@ -23,7 +23,7 @@ Composez vos scènes à partir de plusieurs sources (écran, webcam, images, vid
 - **Filtres par source** : opacité, luminosité, contraste, saturation, teinte, recadrage, miroir et **incrustation fond vert** (calculée sur la carte graphique).
 - **Dock Chat** : chat Twitch + Kick en direct à côté de l'aperçu, avec badges et emotes. Via Restream (Twitch + Kick, API officielles) ou en lecture directe sans compte : Twitch par son chat public, Kick par sa page de chat officielle « popout » (celle que Kick propose pour OBS), lue en arrière-plan avec les vrais badges et emotes. La modération est suivie (en lecture directe comme via Restream) : un message supprimé, les messages d'un viewer banni ou en timeout, ou un chat vidé disparaissent aussi du dock et de l'incrustation.
 - **Mises à jour automatiques** : MyStream vérifie les nouvelles releases au démarrage puis toutes les 4 h ; l'installateur Windows et l'AppImage Linux se mettent à jour tout seuls (installation à la fermeture). Pendant un streaming ou un enregistrement, rien n'est vérifié ni téléchargé : un téléchargement en cours est interrompu et tout reprend une minute après la fin. Les autres formats affichent un lien de téléchargement.
-- **Mixeur audio** : VU-mètres gradués en dB (−60 à 0), crête maintenue 1,5 s, alerte « SATURE » pendant 3 s quand une source sature ; faders, muet, écoute (monitoring) par source ; sources globales *Mic/Aux* et *Audio du bureau*.
+- **Mixeur audio** : VU-mètres gradués en dB (−60 à 0), crête maintenue 1,5 s, alerte « SATURÉ » pendant 3 s quand une source sature ; faders, muet, écoute (monitoring) par source ; sources globales *Mic/Aux* et *Audio du bureau*.
 - **Barre « En direct »** (pendant le live) : durée, spectateurs Twitch et Kick, titre et catégorie, courbe du débit sur 2 minutes avec le débit demandé en repère, images perdues en nombre et en pourcentage. Pendant une reconnexion, la pastille passe à l'orange.
 - **Dock « Titre et catégorie »** : titre et catégorie actuels de Twitch et Kick, spectateurs, modification sur les deux plateformes en même temps (via Restream), recherche de catégorie et titres enregistrés réutilisables. Il se déplace et se masque comme les autres docks.
 - **Récap de fin de live** : durée, messages du chat par plateforme, pic de spectateurs, images perdues, reconnexions, débit moyen et activité du chat minute par minute. Les récaps sont gardés dans *Fichier > Historique des lives*.
@@ -93,23 +93,23 @@ Les mises à jour automatiques téléchargent les releases GitHub sans authentif
 ## Utiliser MyStream avec Restream
 
 1. Lance Restream (`npm start` ou `start.bat`).
-2. Dans MyStream : **Paramètres > Restream**, renseigne l'adresse de l'interface (`http://localhost:3050` par défaut) et le mot de passe si `WEB_PASSWORD` est défini, puis **Tester la connexion**.
-3. **Paramètres > Stream** : choisis le service **Restream (BloopStudio)**.
-4. **Paramètres > Chat** : choisis **Restream** pour afficher le chat Twitch + Kick (avec les vrais badges Twitch).
+2. Dans MyStream : **Paramètres > Restream**, renseignez l'adresse de l'interface (`http://localhost:3050` par défaut) et le mot de passe si `WEB_PASSWORD` est défini, puis **Tester la connexion**.
+3. **Paramètres > Stream** : choisissez le service **Restream (BloopStudio)**.
+4. **Paramètres > Chat** : choisissez **Restream** pour afficher le chat Twitch + Kick (avec les vrais badges Twitch).
 5. Démarre le streaming : Restream relaie le flux vers Twitch et Kick sans le réencoder.
 6. Les spectateurs, le titre et la catégorie viennent des comptes Twitch et Kick connectés dans Restream (boutons OAuth de son interface). Le dock *Titre et catégorie* les modifie sur les deux plateformes d'un coup.
 
-Pour incruster le chat dans le stream, ajoute une source **Chat du stream** à ta scène.
+Pour incruster le chat dans le stream, ajoutez une source **Chat du stream** à votre scène.
 
 ### Restream sur un serveur (NAS, VPS…)
 
-- **Adresse** : mets l'adresse publique de l'interface, ex. `https://bloop.myds.me:3050`.
+- **Adresse** : indiquez l'adresse publique de l'interface, ex. `https://mon-serveur.example.com:3050`.
 - **Mot de passe** : celui de `WEB_PASSWORD` (indispensable si Restream est exposé sur internet).
 - **Certificat auto-signé** (`RESTREAM_TLS=self-signed`) : laisse cochée l'option *Accepter un certificat HTTPS auto-signé*.
 - **Port RTMP** : MyStream envoie le flux sur le **même hôte**, port RTMP de Restream (1935 par défaut). Ce port doit être ouvert/redirigé sur le routeur ou le pare-feu du serveur.
-- **Adresse RTMP différente** (reverse proxy, port public redirigé, autre nom d'hôte) : renseigne le champ *Adresse RTMP*, ex. `rtmp://bloop.myds.me:19350`. La clé d'ingestion reste récupérée automatiquement.
+- **Adresse RTMP différente** (reverse proxy, port public redirigé, autre nom d'hôte) : renseignez le champ *Adresse RTMP*, ex. `rtmp://mon-serveur.example.com:19350`. La clé d'ingestion reste récupérée automatiquement.
 - Le chat Twitch fonctionne partout ; le chat Kick nécessite que Restream soit joignable en HTTPS (voir le README de Restream).
-- **Derrière le relais PHP de Restream** (`php-relay`) : mets l'adresse du site, sans `/restream`, ex. `https://bloop.myds.me` (l'API est relayée sur `/api`). Le RTMP n'est pas relayé : le port RTMP du NAS doit rester ouvert, ou renseigne *Adresse RTMP*.
+- **Derrière le relais PHP de Restream** (`php-relay`) : indiquez l'adresse du site, sans `/restream`, ex. `https://mon-serveur.example.com` (l'API est relayée sur `/api`). Le RTMP n'est pas relayé : le port RTMP du NAS doit rester ouvert, ou renseignez *Adresse RTMP*.
 
 ## Développement
 

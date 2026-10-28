@@ -175,7 +175,8 @@
           this.next += missed * this.interval;
         }
         try {
-          this.frame();
+          // Fenêtre réduite et aucune sortie active : personne ne voit l'image, on ne la calcule pas.
+          if (!document.hidden || MS.outputs.isAnyActive()) this.frame();
         } catch (e) {
           // Une source défaillante ne doit jamais interrompre la boucle de rendu.
           if (e.message !== this.lastError) console.error('Rendu :', e);

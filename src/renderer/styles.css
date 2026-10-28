@@ -962,6 +962,12 @@ textarea.input {
   white-space: pre;
   cursor: pointer;
 }
+.menu-item kbd {
+  float: right;
+  margin-left: 32px;
+  font: inherit;
+  color: var(--muted);
+}
 .menu-item:hover:not(:disabled) {
   background: var(--accent-2);
 }
