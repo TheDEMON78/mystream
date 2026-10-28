@@ -235,7 +235,7 @@
       const r = anchor.getBoundingClientRect();
       const platform = MS.appInfo.platform;
       const entries = Object.entries(MS.SourceTypes)
-        .filter(([key]) => key !== 'desktop_audio' || platform === 'win32')
+        .filter(([key]) => (key !== 'desktop_audio' && key !== 'app_audio') || platform === 'win32')
         .map(([key, t]) => ({ label: `${t.glyph}  ${t.label}`, action: () => this.createSource(key) }));
       const scene = store().editScene();
       const existing = Object.values(store().data.sources).filter((s) => !s.global && !scene.items.some((it) => it.sourceId === s.id));
@@ -581,6 +581,7 @@
           { separator: true },
           { label: 'Exporter la collection de scènes…', action: () => MS.exportCollection() },
           { label: 'Importer une collection de scènes…', action: () => MS.importCollection(false) },
+          { label: 'Importer une collection OBS…', action: () => MS.importObsCollection() },
           { label: 'Restaurer une sauvegarde automatique…', action: () => MS.importCollection(true) },
           { separator: true },
           { label: 'Titre et catégorie du live…', action: () => MS.openLiveInfo() },

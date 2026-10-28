@@ -1355,3 +1355,22 @@ table.history tbody tr:hover {
 #transition-summary:empty {
   display: none;
 }
+
+/* Rapport d'import OBS ------------------------------------------------------ */
+.import-report h4 {
+  margin: 14px 0 6px;
+}
+.import-notes {
+  margin: 0;
+  padding-left: 18px;
+  max-height: 34vh;
+  overflow: auto;
+  user-select: text;
+}
+.import-notes li {
+  margin-bottom: 5px;
+  color: var(--muted);
+}
+.import-notes li::marker {
+  color: var(--accent);
+}

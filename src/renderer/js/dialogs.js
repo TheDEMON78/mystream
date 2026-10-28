@@ -225,7 +225,7 @@
           break;
         }
         case 'capture': {
-          const picker = MS.capturePicker(values, changed);
+          const picker = MS.capturePicker(values, changed, f.kinds);
           input = picker.element;
           Object.assign(getters, picker.getters);
           break;
@@ -240,13 +240,14 @@
 
   /* Sélecteur d'écran / fenêtre ----------------------------------------- */
 
-  MS.capturePicker = function (values, onChange) {
+  MS.capturePicker = function (values, onChange, kinds) {
     const state = { captureId: values.captureId, captureName: values.captureName, captureKind: values.captureKind };
     const grid = el('div', { class: 'capture-grid' }, el('p', { class: 'hint', text: 'Recherche des écrans et fenêtres…' }));
     const refresh = async () => {
       let list = [];
       try {
         list = await window.api.getCaptureSources(true);
+        if (kinds) list = list.filter((s) => kinds.includes(s.kind));
       } catch (e) {
         grid.replaceChildren(el('p', { class: 'hint', text: `Impossible de lister les sources : ${e.message}` }));
         return;

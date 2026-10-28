@@ -259,6 +259,8 @@
       return MS.toast(`Fichier illisible : ${e.message}`, 'error', 8000);
     }
     if (!data) return;
+    // Collection OBS choisie ici par erreur : on passe par l'import OBS.
+    if (MS.isObsCollection(data)) return MS.importObsCollection(data);
     if (!Array.isArray(data.scenes) || !data.scenes.length || typeof data.sources !== 'object') {
       return MS.toast("Ce fichier n'est pas une collection de scènes MyStream.", 'error', 8000);
     }

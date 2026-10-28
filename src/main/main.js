@@ -271,11 +271,20 @@ ipcMain.handle('config:export', async (_e, data) => {
   return res.filePath;
 });
 
-ipcMain.handle('config:import', async (_e, fromBackups) => {
+// Dossier des collections de scènes d'OBS Studio, s'il existe sur ce PC.
+function obsScenesDir() {
+  const base = process.platform === 'win32' ? app.getPath('appData') : process.platform === 'darwin' ? path.join(app.getPath('home'), 'Library', 'Application Support') : path.join(app.getPath('home'), '.config');
+  const dir = path.join(base, 'obs-studio', 'basic', 'scenes');
+  return fs.existsSync(dir) ? dir : app.getPath('documents');
+}
+
+ipcMain.handle('config:import', async (_e, mode) => {
+  const obs = mode === 'obs';
   const res = await dialog.showOpenDialog(win, {
-    defaultPath: fromBackups ? backupDir() : app.getPath('documents'),
+    title: obs ? 'Importer une collection de scènes OBS' : undefined,
+    defaultPath: obs ? obsScenesDir() : mode ? backupDir() : app.getPath('documents'),
     properties: ['openFile'],
-    filters: [{ name: 'Collection de scènes MyStream', extensions: ['json'] }],
+    filters: [{ name: obs ? 'Collection de scènes OBS' : 'Collection de scènes MyStream', extensions: ['json'] }],
   });
   if (res.canceled || !res.filePaths[0]) return null;
   return JSON.parse(fs.readFileSync(res.filePaths[0], 'utf8'));

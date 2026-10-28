@@ -93,9 +93,20 @@
   }
 
   class VideoCaptureRuntime extends StreamRuntime {
-    getStream() {
+    async getStream() {
       const s = this.src.settings;
       const video = {};
+      // Collection importée d'OBS : seul le nom du périphérique est connu.
+      if (s.deviceLabel) {
+        const devices = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput');
+        if (!devices.some((d) => d.deviceId === s.deviceId)) {
+          const want = s.deviceLabel.toLowerCase();
+          const found = devices.find((d) => d.label.toLowerCase() === want) || devices.find((d) => d.label && (d.label.toLowerCase().includes(want) || want.includes(d.label.toLowerCase().replace(/\s*\(.*\)$/, ''))));
+          if (found) s.deviceId = found.deviceId;
+          else if (devices.length && !devices[0].label) throw new Error("Autorise l'accès à la caméra pour retrouver « " + s.deviceLabel + ' »');
+          else throw new Error(`Caméra « ${s.deviceLabel} » introuvable (branchée ?)`);
+        }
+      }
       if (s.deviceId) video.deviceId = { exact: s.deviceId };
       if (s.resolution && s.resolution !== 'default') {
         const [w, h] = s.resolution.split('x').map(Number);
@@ -122,6 +133,37 @@
     rt.pcm.port.postMessage(samples, [samples.buffer]);
   }
 
+  /**
+   * Retrouve l'écran ou la fenêtre à capturer. Les identifiants changent à
+   * chaque session : on cherche par nom exact, puis (fenêtres importées
+   * d'OBS ou audio d'application) par mots du titre ou nom du programme, car
+   * le titre change souvent (salon Discord, morceau en cours, version du jeu…).
+   */
+  MS.findCaptureTarget = function (list, s) {
+    let target = list.find((x) => x.id === s.captureId);
+    if (!target && s.captureName) target = list.find((x) => x.name === s.captureName && x.kind === s.captureKind);
+    if (!target && s.captureKind === 'screen') target = list.find((x) => x.kind === 'screen');
+    const m = s.windowMatch;
+    if (!target && s.captureKind === 'window' && m) {
+      const words = (t) => String(t || '').toLowerCase().normalize('NFKD').match(/[a-z0-9]{3,}/g) || [];
+      const wanted = new Set([...words(m.title), ...words(String(m.exe || '').replace(/\.exe$/i, ''))]);
+      const first = words(m.title)[0];
+      let best = 0;
+      for (const w of list.filter((x) => x.kind === 'window')) {
+        const ws = words(w.name);
+        let score = ws.filter((x) => wanted.has(x)).length;
+        if (first && ws[0] === first) score += 2;
+        if (score > best) {
+          best = score;
+          target = w;
+        }
+      }
+    }
+    return target || null;
+  };
+
+  const RETRY_WINDOW = 5000;
+
   class DisplayCaptureRuntime extends StreamRuntime {
     /** Son de la fenêtre capturée (ou du système pour un écran), sous Windows. */
     wantsAudio() {
@@ -137,18 +179,30 @@
       pushPcm(this, bytes);
     }
     dispose() {
+      clearTimeout(this.retry);
       if (this.pcm) window.api.winAudioStop(this.src.id);
       super.dispose();
+    }
+    /**
+     * Comme OBS : une fenêtre absente (jeu pas encore lancé) ou fermée est
+     * recherchée toutes les 5 s, et la capture reprend dès qu'elle revient.
+     */
+    fail(err) {
+      super.fail(err);
+      if (this.src.settings.captureKind !== 'window' || this.disposed) return;
+      clearTimeout(this.retry);
+      this.retry = setTimeout(() => {
+        if (this.disposed) return;
+        MS.runtimes.refresh(this.src);
+      }, RETRY_WINDOW);
     }
     async getStream() {
       const s = this.src.settings;
       const list = await window.api.getCaptureSources(false);
-      let target = list.find((x) => x.id === s.captureId);
-      // Les identifiants de fenêtres changent d'une session à l'autre : on retrouve la fenêtre par son nom.
-      if (!target && s.captureName) target = list.find((x) => x.name === s.captureName && x.kind === s.captureKind);
-      if (!target && s.captureKind === 'screen') target = list.find((x) => x.kind === 'screen');
-      if (!target) throw new Error('Écran ou fenêtre introuvable');
+      const target = MS.findCaptureTarget(list, s);
+      if (!target) throw new Error(s.captureKind === 'window' ? `Fenêtre introuvable (${s.captureName || 'aucune'}) : nouvelle recherche toutes les 5 s` : 'Écran introuvable');
       s.captureId = target.id;
+      if (target.kind === 'window') s.captureName = target.name;
       const { width, height, fps } = MS.store.settings.video;
       return navigator.mediaDevices.getUserMedia({
         audio: false,
@@ -164,6 +218,43 @@
           },
         },
       });
+    }
+  }
+
+  /**
+   * Son d'une application seule (Discord, navigateur, lecteur de musique…),
+   * sans image : l'équivalent de « Capture audio d'application » d'OBS.
+   */
+  class AppAudioRuntime extends BaseRuntime {
+    async start() {
+      if (!MS.appInfo.windowAudio) return this.fail(new Error("Disponible sous Windows 10 (2004) ou plus récent"));
+      const s = this.src.settings;
+      try {
+        const list = await window.api.getCaptureSources(false);
+        const target = MS.findCaptureTarget(list, { ...s, captureKind: 'window' });
+        if (!target) throw new Error(`Application introuvable (${s.captureName || 'aucune'}) : nouvelle recherche toutes les 5 s`);
+        s.captureId = target.id;
+        s.captureName = target.name;
+        this.markReady();
+      } catch (e) {
+        this.fail(e);
+        clearTimeout(this.retry);
+        this.retry = setTimeout(() => !this.disposed && MS.runtimes.refresh(this.src), RETRY_WINDOW);
+      }
+    }
+    hasAudio() {
+      return this.ready;
+    }
+    audioNode(ctx) {
+      return winAudioNode(this, ctx, this.src.settings.captureId);
+    }
+    pushAudio(bytes) {
+      pushPcm(this, bytes);
+    }
+    dispose() {
+      clearTimeout(this.retry);
+      if (this.pcm) window.api.winAudioStop(this.src.id);
+      super.dispose();
     }
   }
 
@@ -217,6 +308,15 @@
 
   class ImageRuntime extends BaseRuntime {
     async start() {
+      if (MS.isGif(this.src.settings.file) && 'ImageDecoder' in window) {
+        try {
+          this.gif = await new MS.GifPlayer(MS.fileUrl(this.src.settings.file)).load();
+          if (this.disposed) return this.gif.close();
+          return this.markReady();
+        } catch (e) {
+          return this.fail(new Error(`GIF illisible : ${e.message}`));
+        }
+      }
       const img = new Image();
       img.onload = () => this.markReady();
       img.onerror = () => this.fail(new Error('Image illisible'));
@@ -224,13 +324,20 @@
       if (this.src.settings.file) img.src = MS.fileUrl(this.src.settings.file);
     }
     get width() {
+      if (this.gif) return this.gif.width;
       return this.img ? this.img.naturalWidth : 0;
     }
     get height() {
+      if (this.gif) return this.gif.height;
       return this.img ? this.img.naturalHeight : 0;
     }
     drawable() {
-      return this.ready ? this.img : null;
+      if (!this.ready) return null;
+      return this.gif ? this.gif.current(true) : this.img;
+    }
+    dispose() {
+      super.dispose();
+      if (this.gif) this.gif.close();
     }
   }
 
@@ -677,6 +784,17 @@
       defaults: () => ({}),
       create: (src) => new DesktopAudioRuntime(src),
       fields: () => [{ type: 'info', text: 'Capture le son de tout le système. Disponible sous Windows.' }],
+    },
+    app_audio: {
+      label: "Capture audio d'application",
+      glyph: '🎧',
+      audioOnly: true,
+      defaults: () => ({ captureId: '', captureName: '', captureKind: 'window' }),
+      create: (src) => new AppAudioRuntime(src),
+      fields: () => [
+        { type: 'info', text: "Seul le son de cette application est capturé (Discord, navigateur, Spotify…), sans l'image. Si elle est fermée, MyStream la retrouve dès qu'elle se relance." },
+        { key: 'capture', type: 'capture', label: 'Application', kinds: ['window'] },
+      ],
     },
     image: {
       label: 'Image',

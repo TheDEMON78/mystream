@@ -6,13 +6,14 @@ Composez vos scènes à partir de plusieurs sources (écran, webcam, images, vid
 ## Fonctionnalités
 
 - **Scènes** : création, renommage (double-clic), suppression, réorganisation.
-- **Transitions** : *Fondu*, *Coupure*, *Glissement* (4 directions), *Zoom* et *Stinger* (vidéo animée, avec transparence en WebM VP9, son diffusé dans le live et moment du changement de scène réglable). Chaque scène peut avoir sa propre transition (clic droit sur la scène).
+- **Transitions** : *Fondu*, *Coupure*, *Glissement* (4 directions), *Zoom* et *Stinger* (vidéo animée ou GIF, avec transparence en WebM VP9, son diffusé dans le live et moment du changement de scène réglable). Chaque scène peut avoir sa propre transition (clic droit sur la scène).
 - **Mode studio** : aperçu et programme côte à côte, bouton *Transition* pour passer l'aperçu à l'antenne (double-clic sur une scène = à l'antenne).
 - **Sources** :
   - Capture d'écran / de fenêtre (sélecteur avec miniatures), **avec le son de la fenêtre capturée** sous Windows 10 (2004) ou plus récent : seul le son de l'application est pris, pas celui de Discord ou de la musique à côté. Pour un écran, c'est le son de tout le PC sauf MyStream (pas d'écho du retour casque).
   - Périphérique de capture vidéo (webcam, carte d'acquisition) avec choix de résolution et de FPS
   - Capture d'entrée audio (micro) et audio du bureau (Windows)
-  - Image, source média (vidéo/audio, lecture en boucle)
+  - **Capture audio d'application** (Windows) : le son d'un seul programme (Discord, navigateur, Spotify…), sans l'image, retrouvé même si son titre change ou s'il est relancé
+  - Image (dont **GIF animés**), source média (vidéo/audio, lecture en boucle)
   - Texte (police, taille, couleur, contour, fond, alignement) et source de couleur
   - **Chat du stream** incrusté à l'écran (logos Twitch/Kick, badges en images, emotes, disparition automatique des anciens messages)
   - **Navigateur** : n'importe quelle page web (alertes StreamElements/Streamlabs, widgets…), fond transparent, CSS personnalisé
@@ -32,6 +33,29 @@ Composez vos scènes à partir de plusieurs sources (écran, webcam, images, vid
 - **Paramètres** : résolution du canevas (dont vertical 1080×1920), FPS, débits, préréglage x264, périphérique micro.
 - **Barre d'état** : FPS de rendu (cadence exacte, jamais au-dessus de la valeur demandée), images manquées, CPU/mémoire, durée du live et de l'enregistrement.
 - **Menus et docks** : Fichier / Édition / Affichage / Docks / Aide. Chaque dock peut être masqué, déplacé en le tirant par son titre (rangée du bas ou colonne de droite) et redimensionné avec les séparateurs. Les dispositions s'enregistrent sous un nom (*Docks > Enregistrer la disposition…*) et *Disposition d'origine* remet tout en place.
+
+### Importer ses scènes OBS
+
+*Fichier > Importer une collection OBS…* ouvre directement le dossier des collections d'OBS (ou un fichier exporté depuis OBS : *Collection de scènes > Exporter*). On choisit de garder ses scènes MyStream et d'ajouter celles d'OBS, ou de les remplacer (Ctrl+Z pour revenir). Les réglages propres à MyStream (stream, chat, Restream, docks, raccourcis) ne changent pas.
+
+| OBS | MyStream |
+| --- | --- |
+| Capture de fenêtre, capture de jeu | Capture de fenêtre, retrouvée par son titre ou son programme, qui démarre dès que le jeu est lancé |
+| Capture d'écran | Capture d'écran |
+| Périphérique de capture vidéo | Webcam retrouvée par son nom |
+| Capture audio d'application | Capture audio d'application |
+| Source média, image, diaporama, VLC | Média ou image (GIF animés compris) |
+| Texte (GDI+ / FreeType) | Texte (police, taille, gras, italique, couleur, contour, fond) |
+| Navigateur | Navigateur (widgets de chat remplaçables par le *Chat du stream* de MyStream) |
+| Source de couleur | Source de couleur |
+| Mic/Aux, Audio du bureau | Sources globales, avec volume, muet et filtres |
+| Filtres gain, noise gate, compresseur, limiteur, suppression du bruit | Filtres audio |
+| Filtres recadrage, correction des couleurs, clé chroma / couleur | Filtres de la source |
+| Position, échelle, alignement, cadre de redimensionnement, recadrage, visibilité, verrouillage | Repris |
+| Groupes | Dégroupés dans la scène |
+| Transitions (fondu, coupure, glissement, stinger vidéo ou GIF), transition propre à une scène | Reprises |
+
+Un rapport liste ensuite ce qui a été adapté et ce qu'il reste à vérifier (scènes imbriquées, rotation, filtres sans équivalent…).
 
 ### Ce que MyStream corrige par rapport aux reproches faits à OBS
 
@@ -123,6 +147,8 @@ src/
 │       ├── outputs.js     # enregistrement et streaming (MediaRecorder → FFmpeg)
 │       ├── live.js        # barre « En direct », dock Titre et catégorie (via Restream), récap et historique des lives
 │       ├── layout.js      # docks déplaçables, redimensionnables, dispositions enregistrées
+│       ├── obs-import.js  # import des collections de scènes OBS Studio
+│       ├── gif.js         # lecture des GIF animés (images, stingers)
 │       ├── dialogs.js     # fenêtres modales, propriétés, paramètres
 │       └── ui.js          # docks : scènes, sources, mixeur, transitions, commandes
 └── assets/icon.png

@@ -205,8 +205,12 @@
       const now = performance.now();
       this.transition = null;
       if (from && t.type === 'stinger') {
-        const v = this.stinger(t.stingerFile);
-        if (v && v.readyState >= 2 && v.duration) {
+        const st = this.stinger(t.stingerFile);
+        if (st && st.gif && st.gif.duration) {
+          st.gif.restart();
+          this.transition = { type: 'stinger', from, start: now, gif: st.gif, point: Number(t.stingerPoint) || 0, duration: st.gif.duration };
+        } else if (st && st.video && st.video.readyState >= 2 && st.video.duration) {
+          const v = st.video;
           v.muted = !t.stingerAudio;
           v.currentTime = 0;
           v.play().catch(() => {});
@@ -225,23 +229,32 @@
     stinger(file) {
       if (!file) return null;
       this.stingers = this.stingers || new Map();
-      let v = this.stingers.get(file);
-      if (!v) {
-        v = document.createElement('video');
-        v.preload = 'auto';
-        v.playsInline = true;
-        v.src = MS.fileUrl(file);
-        v.addEventListener('error', () => MS.toast(`Vidéo du stinger illisible : ${file}`, 'error', 8000), { once: true });
-        try {
-          const node = MS.audio.ctx.createMediaElementSource(v);
-          node.connect(MS.audio.dest);
-        } catch (e) {
-          console.warn('Son du stinger indisponible', e);
-        }
-        v.load();
-        this.stingers.set(file, v);
+      let st = this.stingers.get(file);
+      if (st) return st;
+      st = {};
+      this.stingers.set(file, st);
+      // Stinger en GIF (fréquent dans les packs pour OBS) : pas de son.
+      if (MS.isGif(file)) {
+        new MS.GifPlayer(MS.fileUrl(file))
+          .load()
+          .then((g) => (st.gif = g))
+          .catch((e) => MS.toast(`Stinger illisible : ${file} (${e.message})`, 'error', 8000));
+        return st;
       }
-      return v;
+      const v = document.createElement('video');
+      v.preload = 'auto';
+      v.playsInline = true;
+      v.src = MS.fileUrl(file);
+      v.addEventListener('error', () => MS.toast(`Vidéo du stinger illisible : ${file}`, 'error', 8000), { once: true });
+      try {
+        const node = MS.audio.ctx.createMediaElementSource(v);
+        node.connect(MS.audio.dest);
+      } catch (e) {
+        console.warn('Son du stinger indisponible', e);
+      }
+      v.load();
+      st.video = v;
+      return st;
     },
 
     preloadStingers() {
@@ -258,10 +271,10 @@
       const from = MS.store.scene(tr.from);
       const elapsed = now - tr.start;
       if (tr.type === 'stinger') {
-        const v = tr.video;
-        if (v.ended || elapsed > tr.duration + 250) return false;
+        if (elapsed > tr.duration + 250 || (tr.video && tr.video.ended)) return false;
         this.drawScene(ctx, elapsed < tr.point ? from : current, 1);
-        if (v.readyState >= 2) ctx.drawImage(v, 0, 0, W, H);
+        const img = tr.gif ? tr.gif.current(false) : tr.video.readyState >= 2 ? tr.video : null;
+        if (img) ctx.drawImage(img, 0, 0, W, H);
         return true;
       }
       const p = elapsed / tr.duration;
@@ -314,10 +327,15 @@
 
     /** Première apparition : comme OBS, on place l'élément en haut à gauche et on le réduit s'il dépasse. */
     initItem(item, w, h) {
-      const { width, height } = MS.store.settings.video;
-      const s = Math.min(1, width / w, height / h);
-      item.scaleX = s;
-      item.scaleY = s;
+      if (item.obsPlace) {
+        Object.assign(item, MS.obsPlacement(item.obsPlace, w, h));
+        delete item.obsPlace;
+      } else {
+        const { width, height } = MS.store.settings.video;
+        const s = Math.min(1, width / w, height / h);
+        item.scaleX = s;
+        item.scaleY = s;
+      }
       MS.store.save();
       MS.emit('items:changed');
     },
@@ -370,7 +388,10 @@
       ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
       const current = MS.store.currentScene();
-      if (this.transition && !this.drawTransition(ctx, this.transition, current, t0)) this.transition = null;
+      if (this.transition && !this.drawTransition(ctx, this.transition, current, t0)) {
+        if (this.transition.gif) this.transition.gif.prepare();
+        this.transition = null;
+      }
       if (!this.transition) this.drawScene(ctx, current, 1);
 
       // Mode studio : l'aperçu est rendu directement à la taille affichée.
