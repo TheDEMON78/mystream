@@ -42,6 +42,7 @@ contextBridge.exposeInMainWorld('api', {
   winAudioStop: (id) => ipcRenderer.send('winaudio:stop', id),
   onWinAudioData: listen('winaudio:data'),
   onWinAudioError: listen('winaudio:error'),
+  copyText: (text) => ipcRenderer.invoke('clipboard:write', text),
   gameWatch: (id, on) => ipcRenderer.send('game:watch', id, on),
   gameCurrent: () => ipcRenderer.invoke('game:current'),
   onGameChanged: listen('game:changed'),

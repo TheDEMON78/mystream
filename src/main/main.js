@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain, desktopCapturer, dialog, shell, session, systemPreferences, Menu, net, globalShortcut, Tray, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, desktopCapturer, dialog, shell, session, systemPreferences, Menu, net, globalShortcut, Tray, nativeImage, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -302,6 +302,7 @@ ipcMain.handle('disk:free', (_e, dir) => {
 });
 
 ipcMain.handle('logs:open', () => shell.openPath(logger.dir()));
+ipcMain.handle('clipboard:write', (_e, text) => clipboard.writeText(String(text)));
 ipcMain.on('log', (_e, level, msg) => (['info', 'warn', 'error'].includes(level) ? logger[level] : logger.info)(`[interface] ${msg}`));
 
 /* Raccourcis clavier globaux (actifs même quand un jeu a le focus) ------ */

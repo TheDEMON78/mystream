@@ -615,6 +615,7 @@
           { label: 'Assistant de configuration…', action: () => MS.openWizard() },
           { label: 'Rechercher des mises à jour', action: () => this.checkUpdates() },
           { label: 'Ouvrir le dossier des journaux', action: () => window.api.openLogs() },
+          { label: "Copier le diagnostic d'affichage", action: () => this.copyLayoutDiagnostic() },
           { separator: true },
           { label: 'Page du projet (GitHub)', action: () => window.api.openExternal('https://github.com/TheDEMON78/mystream') },
           { label: 'Nouveautés (releases)', action: () => window.api.openExternal('https://github.com/TheDEMON78/mystream/releases') },
@@ -623,6 +624,38 @@
         ],
       };
       this.showMenu(menus[name], r.left, r.bottom + 2);
+    },
+
+    /** Mesures de la fenêtre et des docks, à coller dans un rapport de bug (aucune donnée personnelle). */
+    copyLayoutDiagnostic() {
+      const rect = (e) => {
+        if (!e) return null;
+        const r = e.getBoundingClientRect();
+        const cs = getComputedStyle(e);
+        return { top: Math.round(r.top), bottom: Math.round(r.bottom), left: Math.round(r.left), right: Math.round(r.right), display: cs.display, flex: cs.flex, hidden: e.hidden };
+      };
+      const ui = store().settings.ui;
+      const zone = (z) => [...MS.$(z).children].map((c) => ({ id: c.id || c.className, ...rect(c) }));
+      const diag = {
+        version: MS.appInfo.version,
+        platform: MS.appInfo.platform,
+        window: [window.innerWidth, window.innerHeight, window.devicePixelRatio],
+        layout: ui.layout,
+        docks: ui.docks,
+        appRows: getComputedStyle(MS.$('#app')).gridTemplateRows,
+        mainRows: getComputedStyle(MS.$('#main')).gridTemplateRows,
+        mainCols: getComputedStyle(MS.$('#main')).gridTemplateColumns,
+        main: [...MS.$('#main').children].map((c) => ({ id: c.id, ...rect(c) })),
+        app: [...MS.$('#app').children].map((c) => ({ id: c.id, ...rect(c) })),
+        side: zone('#side-docks'),
+        bottom: zone('#docks'),
+        preview: ['#preview-area', '#preview-toolbar', '#chat-list'].map((s) => ({ id: s, ...rect(MS.$(s)) })),
+      };
+      const text = JSON.stringify(diag);
+      window.api.copyText(text).then(
+        () => MS.toast("Diagnostic d'affichage copié : colle-le dans ton message.", 'success', 5000),
+        () => MS.toast('Copie impossible.', 'error')
+      );
     },
 
     toggleDock(key) {
