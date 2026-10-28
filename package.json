@@ -59,7 +59,28 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "artifactName": "${productName}-${version}-win-setup.${ext}"
+      "perMachine": false,
+      "artifactName": "${productName}-${version}-win-setup.${ext}",
+      "language": "1036",
+      "installerLanguages": [
+        "fr_FR"
+      ],
+      "multiLanguageInstaller": true,
+      "installerIcon": "build/installer.ico",
+      "uninstallerIcon": "build/installer.ico",
+      "installerHeaderIcon": "build/installer.ico",
+      "installerSidebar": "build/installer-sidebar.bmp",
+      "uninstallerSidebar": "build/installer-sidebar.bmp",
+      "installerHeader": "build/installer-header.bmp",
+      "license": "LICENSE",
+      "include": "build/installer.nsh",
+      "shortcutName": "MyStream",
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "menuCategory": "BloopStudio",
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false,
+      "uninstallDisplayName": "MyStream ${version}"
     },
     "portable": {
       "artifactName": "${productName}-${version}-win-portable.${ext}"
@@ -90,6 +111,27 @@
         "repo": "mystream",
         "releaseType": "release"
       }
-    ]
+    ],
+    "dmg": {
+      "title": "MyStream ${version}",
+      "background": "build/dmg-background.png",
+      "iconSize": 96,
+      "window": {
+        "width": 540,
+        "height": 380
+      },
+      "contents": [
+        {
+          "x": 130,
+          "y": 190
+        },
+        {
+          "x": 410,
+          "y": 190,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    }
   }
 }
