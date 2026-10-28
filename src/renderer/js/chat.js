@@ -225,8 +225,13 @@
     },
 
     push(m) {
-      // Restream peut relayer les actions de modération dans le même flux.
-      if (m.moderation) return this.moderate({ platform: m.platform, ...m.moderation });
+      // Restream relaie les suppressions dans le même flux : { action:
+      // 'delete-message' | 'clear-user' | 'clear-all', messageId, username }.
+      if (m.action) {
+        const actions = { 'delete-message': 'delete', 'clear-user': 'user', 'clear-all': 'clear' };
+        return this.moderate({ platform: m.platform, action: actions[m.action], id: m.messageId, userId: m.userId, username: m.userLogin || m.username });
+      }
+      if (m.messageId && !m.id) m.id = m.messageId;
       // Restream rejoue un court historique à chaque (re)connexion : on
       // ignore ce qui a déjà été affiché pour éviter les doublons.
       if (m.historical) {
@@ -258,7 +263,7 @@
         if (m.platform !== a.platform || m.system || m.divider) return false;
         if (a.action === 'clear') return true;
         if (a.action === 'delete') return !!a.id && m.id === a.id;
-        if (a.action === 'user') return (a.userId != null && m.userId != null && String(m.userId) === String(a.userId)) || (!!name && String(m.username || '').toLowerCase() === name);
+        if (a.action === 'user') return (a.userId != null && m.userId != null && String(m.userId) === String(a.userId)) || (!!name && [m.username, m.userLogin].some((n) => String(n || '').toLowerCase() === name));
         return false;
       };
       const kept = this.messages.filter((m) => !hit(m));
