@@ -456,6 +456,13 @@ ipcMain.on('winaudio:stop', (_e, id) => windowAudio.stop(id));
 ipcMain.handle('update:check', () => updater.check());
 ipcMain.handle('update:state', () => updater.getState());
 ipcMain.on('update:install', () => updater.install());
+// Streaming, enregistrement ou reconnexion en cours (état tenu par l'interface).
+let outputsBusy = false;
+ipcMain.on('outputs:busy', (_e, busy) => {
+  if (Boolean(busy) === outputsBusy) return;
+  outputsBusy = Boolean(busy);
+  updater.setBusy(outputsBusy);
+});
 
 ipcMain.handle('app:info', () => ({
   version: app.getVersion(),
@@ -545,7 +552,7 @@ if (!app.requestSingleInstanceLock()) {
 
     logger.info(`MyStream ${app.getVersion()} démarré (${process.platform}, Electron ${process.versions.electron})`);
     createWindow();
-    updater.init(send);
+    updater.init(send, () => outputsBusy || outputs.size > 0);
     if (FFMPEG) encoders.detect(FFMPEG);
     app.on('activate', () => {
       if (!win) createWindow();

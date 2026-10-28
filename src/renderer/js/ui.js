@@ -638,20 +638,28 @@
     /* Mises à jour ---------------------------------------------------------- */
     initUpdates() {
       const badge = MS.$('#update-badge');
-      badge.addEventListener('click', () => window.api.updateInstall());
+      badge.addEventListener('click', () => {
+        if (MS.outputs.isAnyActive()) return MS.toast("La mise à jour s'installera après le live ou l'enregistrement : arrête-les d'abord.", 'info', 6000);
+        window.api.updateInstall();
+      });
+      // Les mises à jour attendent la fin des lives et des enregistrements.
+      MS.on('outputs:changed', () => window.api.setOutputsBusy(MS.outputs.isAnyActive()));
       const show = (st) => {
         const texts = {
           downloading: `Mise à jour v${st.version} : téléchargement ${st.percent || 0} %`,
           ready: `Redémarrer pour installer la v${st.version}`,
           available: `Nouvelle version v${st.version} : télécharger`,
+          waiting: `Mise à jour v${st.version} : après le live`,
         };
         badge.hidden = !texts[st.status];
         badge.textContent = texts[st.status] || '';
-        badge.disabled = st.status === 'downloading';
+        badge.disabled = st.status === 'downloading' || st.status === 'waiting';
         if (st.status === 'ready' && this.lastUpdate !== 'ready') MS.toast(`La v${st.version} est prête : elle s'installera à la fermeture de MyStream.`, 'success', 8000);
-        if (this.manualCheck && ['latest', 'error', 'available', 'downloading'].includes(st.status)) {
+        if (this.manualCheck && ['latest', 'error', 'available', 'downloading', 'deferred', 'waiting'].includes(st.status)) {
           this.manualCheck = false;
           if (st.status === 'latest') MS.toast('MyStream est à jour.', 'success');
+          else if (st.status === 'waiting') MS.toast(`La v${st.version} est prête à être téléchargée : ce sera fait une minute après la fin du live ou de l’enregistrement.`, 'info', 6000);
+          else if (st.status === 'deferred') MS.toast('Recherche reportée : elle se fera une minute après la fin du live ou de l’enregistrement.', 'info', 6000);
           else if (st.status === 'error') MS.toast(`Mise à jour impossible : ${st.error}`, 'error', 8000);
         }
         this.lastUpdate = st.status;

@@ -45,6 +45,7 @@ contextBridge.exposeInMainWorld('api', {
   updateCheck: () => ipcRenderer.invoke('update:check'),
   updateState: () => ipcRenderer.invoke('update:state'),
   updateInstall: () => ipcRenderer.send('update:install'),
+  setOutputsBusy: (busy) => ipcRenderer.send('outputs:busy', busy),
   onUpdateState: listen('update:state'),
   exportConfig: (data) => ipcRenderer.invoke('config:export', data),
   importConfig: (fromBackups) => ipcRenderer.invoke('config:import', fromBackups),
