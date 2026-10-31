@@ -284,7 +284,6 @@
     const st = MS.store.settings;
     const encoders = MS.encoders.length ? MS.encoders : await window.api.encoders().catch(() => []);
     const hardware = encoders.some((e) => e.id !== 'x264');
-    const recommended = hardware ? '1080p60' : '720p30';
     const services = Object.entries(MS.STREAM_SERVICES).map(([value, s]) => ({ value, label: s.label }));
     const mics = [{ value: 'disabled', label: 'Aucun micro' }, ...(await MS.deviceOptions('audioinput', true))];
     const values = {
@@ -292,7 +291,7 @@
       service: st.stream.service,
       key: st.stream.key,
       restreamUrl: st.restream.url,
-      quality: recommended,
+      quality: '1080p60',
       mic: st.audio.micDevice,
       addScreen: !Object.values(MS.store.data.sources).some((s) => s.type === 'display_capture'),
     };
@@ -314,7 +313,7 @@
         {
           key: 'quality',
           type: 'select',
-          label: `Qualité (recommandée pour ce PC : ${recommended})`,
+          label: hardware ? 'Qualité' : 'Qualité (sans encodeur matériel sur ce PC, 720p est plus sûr)',
           options: Object.entries(QUALITIES).map(([value, q]) => ({ value, label: q.label })),
         },
         { key: 'mic', type: 'select', label: 'Micro', options: mics },

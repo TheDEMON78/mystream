@@ -237,6 +237,7 @@
       const pct = s.lostPercent();
       b.lost.textContent = `${fmtInt(s.lost())} image${s.lost() > 1 ? 's' : ''} perdue${s.lost() > 1 ? 's' : ''} · ${fmtPct(pct)}`;
       b.lost.className = `lb-lost ${pct >= 5 ? 'bad' : pct >= 1 ? 'warn' : ''}`;
+      b.lost.title = `Manquées au rendu : ${fmtInt(s.lost() - s.encoderDrops)} · écartées par l'encodeur : ${fmtInt(s.encoderDrops)}\nCliquer pour le diagnostic`;
     },
 
     drawSpark(values) {

@@ -868,7 +868,7 @@
     video_capture: {
       label: 'Périphérique de capture vidéo',
       glyph: '📷',
-      defaults: () => ({ deviceId: '', resolution: 'default', fps: 'default' }),
+      defaults: () => ({ deviceId: '', resolution: '1920x1080', fps: '60' }),
       create: (src) => new VideoCaptureRuntime(src),
       fields: async () => [
         { key: 'deviceId', type: 'select', label: 'Périphérique', options: await deviceOptions('videoinput', false) },
@@ -1027,7 +1027,7 @@
     browser: {
       label: 'Navigateur',
       glyph: '🌐',
-      defaults: () => ({ url: '', width: 800, height: 600, fps: 30, css: MS.appInfo.defaultBrowserCss, audio: false }),
+      defaults: () => ({ url: '', width: 800, height: 600, fps: 60, css: MS.appInfo.defaultBrowserCss, audio: false }),
       create: (src) => new BrowserRuntime(src),
       fields: () => [
         { key: 'url', type: 'text', label: 'URL (ou chemin d’un fichier HTML local)', placeholder: 'https://…' },

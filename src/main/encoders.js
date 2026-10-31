@@ -18,15 +18,18 @@ const CANDIDATES = {
   darwin: ['h264_videotoolbox'],
 };
 
-function probeOne(ffmpeg, enc) {
+function probeOne(ffmpeg, enc, encArgs) {
   return new Promise((resolve) => {
     const args = ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=black:s=320x180:r=30', '-frames:v', '3'];
-    args.push('-c:v', enc, ...(enc === 'h264_qsv' ? ['-pix_fmt', 'nv12'] : []), '-f', 'null', '-');
+    args.push(...encArgs, '-f', 'null', '-');
     execFile(ffmpeg, args, { timeout: 10000, windowsHide: true }, (err) => resolve(!err));
   });
 }
 
 let cache = null;
+// Encodeurs dont la carte refuse les réglages « qualité » (anciennes cartes
+// sans images B…) : ils gardent les réglages de base.
+const basicOnly = new Set();
 
 /** Liste des encodeurs utilisables, du plus recommandé au moins recommandé. */
 function detect(ffmpeg) {
@@ -35,7 +38,12 @@ function detect(ffmpeg) {
       const found = [];
       if (ffmpeg) {
         for (const enc of CANDIDATES[process.platform] || []) {
-          if (await probeOne(ffmpeg, enc)) found.push(enc);
+          const opts = { bitrate: 2000, fps: 30 };
+          if (await probeOne(ffmpeg, enc, videoArgs(enc, opts))) found.push(enc);
+          else if (await probeOne(ffmpeg, enc, videoArgs(enc, { ...opts, basic: true }))) {
+            basicOnly.add(enc);
+            found.push(enc);
+          }
         }
       }
       found.push('x264');
@@ -46,18 +54,22 @@ function detect(ffmpeg) {
 }
 
 /** Arguments FFmpeg de l'encodeur vidéo pour un débit constant (streaming). */
-function videoArgs(enc, { bitrate, preset, fps }) {
+function videoArgs(enc, { bitrate, preset, fps, basic }) {
+  basic = basic || basicOnly.has(enc);
   const rate = ['-b:v', `${bitrate}k`, '-maxrate', `${bitrate}k`, '-bufsize', `${bitrate * 2}k`];
   const gop = ['-g', String(fps * 2)];
   switch (enc) {
     case 'h264_nvenc':
-      return ['-c:v', enc, '-preset', 'p4', '-tune', 'll', '-rc', 'cbr', ...rate, ...gop, '-pix_fmt', 'yuv420p', '-bf', '0'];
+      // Réglages « Qualité » d'OBS : p5, haute qualité, 2 images B, analyse anticipée.
+      if (basic) return ['-c:v', enc, '-preset', 'p4', '-tune', 'll', '-rc', 'cbr', ...rate, ...gop, '-pix_fmt', 'yuv420p', '-bf', '0'];
+      return ['-c:v', enc, '-preset', 'p5', '-tune', 'hq', '-rc', 'cbr', ...rate, ...gop, '-pix_fmt', 'yuv420p', '-bf', '2', '-spatial-aq', '1', '-rc-lookahead', '20'];
     case 'h264_qsv':
-      return ['-c:v', enc, '-preset', 'veryfast', ...rate, ...gop, '-pix_fmt', 'nv12'];
+      return ['-c:v', enc, '-preset', basic ? 'veryfast' : 'medium', ...rate, ...gop, '-pix_fmt', 'nv12'];
     case 'h264_amf':
-      return ['-c:v', enc, '-usage', 'lowlatency', '-rc', 'cbr', ...rate, ...gop, '-pix_fmt', 'yuv420p'];
+      if (basic) return ['-c:v', enc, '-usage', 'lowlatency', '-rc', 'cbr', ...rate, ...gop, '-pix_fmt', 'yuv420p'];
+      return ['-c:v', enc, '-usage', 'transcoding', '-quality', 'quality', '-rc', 'cbr', ...rate, ...gop, '-pix_fmt', 'yuv420p'];
     case 'h264_videotoolbox':
-      return ['-c:v', enc, '-realtime', '1', ...rate, ...gop, '-pix_fmt', 'yuv420p'];
+      return ['-c:v', enc, '-realtime', '1', ...(basic ? [] : ['-profile:v', 'high']), ...rate, ...gop, '-pix_fmt', 'yuv420p'];
     default:
       return ['-c:v', 'libx264', '-preset', preset || 'veryfast', '-tune', 'zerolatency', ...rate, ...gop, '-sc_threshold', '0', '-pix_fmt', 'yuv420p'];
   }

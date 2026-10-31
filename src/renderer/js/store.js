@@ -17,9 +17,10 @@
     return {
       version: 1,
       settings: {
-        video: { width: 1920, height: 1080, fps: 30 },
-        stream: { service: 'twitch', server: STREAM_SERVICES.twitch.server, key: '', videoBitrate: 4500, audioBitrate: 160, preset: 'veryfast', encoder: 'auto' },
-        output: { recordPath: '', format: 'mp4', videoBitrate: 8000, audioBitrate: 192, preset: 'veryfast' },
+        video: { width: 1920, height: 1080, fps: 60 },
+        // Qualité maximale par défaut : 6000 kb/s et 160 kb/s sont les plafonds de Twitch.
+        stream: { service: 'twitch', server: STREAM_SERVICES.twitch.server, key: '', videoBitrate: 6000, audioBitrate: 160, preset: 'veryfast', encoder: 'auto' },
+        output: { recordPath: '', format: 'mp4', videoBitrate: 40000, audioBitrate: 320, preset: 'veryfast' },
         audio: { micDevice: 'default', desktopAudio: false },
         transition: { type: 'fade', duration: 300, direction: 'left', stingerFile: '', stingerPoint: 600, stingerAudio: true },
         liveInfo: { titles: [] },

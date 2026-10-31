@@ -94,7 +94,12 @@
     /** Flux composite : image du canvas + mixage audio. */
     stream() {
       if (!this._stream) {
-        const v = MS.compositor.canvas.captureStream(MS.store.settings.video.fps).getVideoTracks()[0];
+        // Capture pilotée par le rendu (requestFrame) : exactement une image
+        // transmise par image dessinée. Avec une cadence fixe, le navigateur
+        // échantillonne le canevas sur sa propre horloge, décalée de celle du
+        // rendu : images en double ou sautées, que FFmpeg doit ensuite écarter.
+        const v = MS.compositor.canvas.captureStream(0).getVideoTracks()[0];
+        this.videoTrack = v;
         const a = MS.audio.dest.stream.getAudioTracks()[0];
         this._stream = new MediaStream([v, a].filter(Boolean));
       }
@@ -105,6 +110,7 @@
       if (this.isAnyActive()) return;
       if (this._stream) this._stream.getVideoTracks().forEach((t) => t.stop());
       this._stream = null;
+      this.videoTrack = null;
     },
 
     isAnyActive() {
