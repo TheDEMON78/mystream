@@ -241,9 +241,16 @@
       const fps = MS.store.settings.video.fps;
       // Deux relevés consécutifs au-delà de 10 % : on ignore les à-coups ponctuels (démarrage…).
       this.lagStreak = lagged > fps * 0.2 ? (this.lagStreak || 0) + 1 : 0;
+      const longMs = stats.longTaskMs - (this.lastLongMs ?? stats.longTaskMs);
+      this.lastLongMs = stats.longTaskMs;
       if (this.lagStreak >= 2) {
         level = 'warn';
-        message = `Rendu surchargé (${lagged} images manquées en 2 s) : réduisez la résolution ou le nombre d'images par seconde, ou retirez des sources lourdes (pages web animées, captures multiples).`;
+        if (longMs < 200 && stats.renderMs < this.interval() / 2) {
+          // MyStream calcule vite mais attend : c'est la carte graphique qui est saturée (souvent par le jeu).
+          message = `Carte graphique saturée (${lagged} images manquées en 2 s), sans doute par le jeu : limitez ses images par seconde (VSync ou limite à 120 i/s)${MS.gpuPriority === 'realtime' ? '' : ', ou lancez MyStream en tant qu’administrateur pour qu’il passe avant le jeu sur la carte graphique, comme OBS'}.`;
+        } else {
+          message = `Rendu surchargé (${lagged} images manquées en 2 s) : réduisez la résolution ou le nombre d'images par seconde, ou retirez des sources lourdes (pages web animées, captures multiples).`;
+        }
       }
       if (stream && stream.progress && stream.progress.speed) {
         stream.slow = stream.progress.speed < 0.93 ? (stream.slow || 0) + 1 : 0;
@@ -265,6 +272,10 @@
         this.lastHealthToast = performance.now();
         MS.toast(message, 'error', 10000);
       }
+    },
+
+    interval() {
+      return 1000 / MS.store.settings.video.fps;
     },
 
     async checkDisk() {

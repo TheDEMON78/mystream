@@ -135,7 +135,7 @@
     timer: null,
     transition: null,
     chromas: new Map(),
-    stats: { fps: 0, renderMs: 0, lagged: 0, total: 0 },
+    stats: { fps: 0, renderMs: 0, lagged: 0, total: 0, maxLateMs: 0, longTasks: 0, longTaskMs: 0 },
 
     init(canvas, studioCanvas) {
       this.canvas = canvas;
@@ -143,6 +143,17 @@
       this.studioCanvas = studioCanvas;
       this.studioCtx = studioCanvas.getContext('2d', { alpha: false });
       MS.on('runtime:disposed', (id) => this.chromas.delete(id));
+      // Tâches de plus de 50 ms qui bloquent l'interface (et donc le rendu) : pour le diagnostic.
+      try {
+        new PerformanceObserver((list) => {
+          for (const e of list.getEntries()) {
+            this.stats.longTasks++;
+            this.stats.longTaskMs += e.duration;
+          }
+        }).observe({ type: 'longtask' });
+      } catch {
+        /* non pris en charge */
+      }
       this.applyVideoSettings();
     },
 
@@ -164,10 +175,11 @@
       this.fps = fps;
       this.interval = 1000 / fps;
       this.next = performance.now();
-      this.window = { frames: 0, start: this.next };
+      this.window = { frames: 0, start: this.next, maxLate: 0 };
       const tick = () => {
         const now = performance.now();
         const late = now - this.next;
+        if (late > this.window.maxLate) this.window.maxLate = late;
         if (late >= this.interval) {
           // Images impossibles à rattraper : on les compte et on se recale.
           const missed = Math.floor(late / this.interval);
@@ -178,18 +190,25 @@
           // Fenêtre réduite et aucune sortie active : personne ne voit l'image, on ne la calcule pas.
           if (!document.hidden || MS.outputs.isAnyActive()) {
             this.frame();
+            this.window.frames++;
             const track = MS.outputs.videoTrack;
-            if (track && track.readyState === 'live') track.requestFrame();
+            if (track && track.readyState === 'live') {
+              const t = performance.now();
+              track.requestFrame();
+              this.stats.sendMs = (this.stats.sendMs || 0) * 0.9 + (performance.now() - t) * 0.1;
+            }
           }
         } catch (e) {
           // Une source défaillante ne doit jamais interrompre la boucle de rendu.
           if (e.message !== this.lastError) console.error('Rendu :', e);
           this.lastError = e.message;
         }
-        this.window.frames++;
-        if (this.next - this.window.start >= 1000) {
-          this.stats.fps = (this.window.frames * 1000) / (this.next - this.window.start + this.interval);
-          this.window = { frames: 0, start: this.next + this.interval };
+        // Images réellement dessinées par seconde (les images manquées ne comptent pas).
+        const end = performance.now();
+        if (end - this.window.start >= 1000) {
+          this.stats.fps = (this.window.frames * 1000) / (end - this.window.start);
+          this.stats.maxLateMs = this.window.maxLate;
+          this.window = { frames: 0, start: end, maxLate: 0 };
         }
         this.next += this.interval;
         this.cancel = schedule(tick, Math.max(0, this.next - performance.now()));

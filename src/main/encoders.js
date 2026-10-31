@@ -60,9 +60,11 @@ function videoArgs(enc, { bitrate, preset, fps, basic }) {
   const gop = ['-g', String(fps * 2)];
   switch (enc) {
     case 'h264_nvenc':
-      // Réglages « Qualité » d'OBS : p5, haute qualité, 2 images B, analyse anticipée.
+      // Qualité proche du préréglage « Qualité » d'OBS : p5, haute qualité, 2 images B.
+      // Pas d'analyse anticipée ni d'AQ : elles calculent sur la carte graphique, déjà
+      // occupée par le jeu, et provoquaient des saccades.
       if (basic) return ['-c:v', enc, '-preset', 'p4', '-tune', 'll', '-rc', 'cbr', ...rate, ...gop, '-pix_fmt', 'yuv420p', '-bf', '0'];
-      return ['-c:v', enc, '-preset', 'p5', '-tune', 'hq', '-rc', 'cbr', ...rate, ...gop, '-pix_fmt', 'yuv420p', '-bf', '2', '-spatial-aq', '1', '-rc-lookahead', '20'];
+      return ['-c:v', enc, '-preset', 'p5', '-tune', 'hq', '-rc', 'cbr', ...rate, ...gop, '-pix_fmt', 'yuv420p', '-bf', '2'];
     case 'h264_qsv':
       return ['-c:v', enc, '-preset', basic ? 'veryfast' : 'medium', ...rate, ...gop, '-pix_fmt', 'nv12'];
     case 'h264_amf':

@@ -8,6 +8,7 @@
 //   window-audio.exe pid:<pid>       son d'un processus
 //   window-audio.exe exclude:<pid>   son de tout le système SAUF ce processus
 //   window-audio.exe games:<pid>     surveille le jeu au premier plan (voir watchGames)
+//   window-audio.exe prio:<pid>,…    priorité processeur et GPU de MyStream (voir raisePriority)
 //
 // Sortie : PCM flottant 32 bits, stéréo entrelacé, 48 kHz, sur stdout.
 // Le programme s'arrête dès que stdin est fermé (MyStream quitté).
@@ -188,13 +189,59 @@ static int watchGames(DWORD ownPid) {
   }
 }
 
+// Priorité de MyStream face au jeu, comme OBS : sans elle, un jeu qui
+// occupe toute la carte graphique passe avant le rendu et l'encodage du
+// stream (saccades et gels). Priorité processeur « au-dessus de la normale »
+// et priorité GPU « temps réel » (administrateur) ou « haute » sinon.
+// Affiche une ligne par processus : <pid> cpu=<0|1> gpu=<realtime|high|none>.
+typedef LONG(WINAPI *SetGpuPriorityFn)(HANDLE, int);
+static const int kGpuPriorityHigh = 4;
+static const int kGpuPriorityRealtime = 5;
+
+static void enablePrivilege(const wchar_t *name) {
+  HANDLE token;
+  if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &token)) return;
+  TOKEN_PRIVILEGES tp = {};
+  tp.PrivilegeCount = 1;
+  tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+  if (LookupPrivilegeValueW(nullptr, name, &tp.Privileges[0].Luid)) AdjustTokenPrivileges(token, FALSE, &tp, 0, nullptr, nullptr);
+  CloseHandle(token);
+}
+
+static int raisePriority(const wchar_t *list) {
+  HMODULE gdi = LoadLibraryW(L"gdi32.dll");
+  SetGpuPriorityFn setGpu = gdi ? reinterpret_cast<SetGpuPriorityFn>(GetProcAddress(gdi, "D3DKMTSetProcessSchedulingPriorityClass")) : nullptr;
+  enablePrivilege(L"SeIncreaseBasePriorityPrivilege");
+  const wchar_t *p = list;
+  while (*p) {
+    wchar_t *end;
+    DWORD pid = wcstoul(p, &end, 10);
+    if (end == p) break;
+    p = *end == L',' ? end + 1 : end;
+    HANDLE h = OpenProcess(PROCESS_SET_INFORMATION | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!h) {
+      printf("%lu cpu=0 gpu=none\n", pid);
+      continue;
+    }
+    BOOL cpu = SetPriorityClass(h, ABOVE_NORMAL_PRIORITY_CLASS);
+    const char *gpu = "none";
+    if (setGpu && setGpu(h, kGpuPriorityRealtime) == 0) gpu = "realtime";
+    else if (setGpu && setGpu(h, kGpuPriorityHigh) == 0) gpu = "high";
+    printf("%lu cpu=%d gpu=%s\n", pid, cpu ? 1 : 0, gpu);
+    CloseHandle(h);
+  }
+  fflush(stdout);
+  return 0;
+}
+
 int wmain(int argc, wchar_t **argv) {
   if (argc < 2) {
-    fprintf(stderr, "Usage : window-audio.exe hwnd:<handle> | pid:<pid> | exclude:<pid> | games:<pid>\n");
+    fprintf(stderr, "Usage : window-audio.exe hwnd:<handle> | pid:<pid> | exclude:<pid> | games:<pid> | prio:<pid>,...\n");
     return 2;
   }
   const wchar_t *arg = argv[1];
   if (wcsncmp(arg, L"games:", 6) == 0) return watchGames(wcstoul(arg + 6, nullptr, 10));
+  if (wcsncmp(arg, L"prio:", 5) == 0) return raisePriority(arg + 5);
   DWORD pid = 0;
   MS_LOOPBACK_MODE mode = MS_LOOPBACK_INCLUDE_TREE;
   if (wcsncmp(arg, L"hwnd:", 5) == 0) {

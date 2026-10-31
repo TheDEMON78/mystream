@@ -187,6 +187,7 @@ ipcMain.handle('output:start', async (_e, opts) => {
     return { ok: false, error: e.message };
   }
   outputs.set(out.id, out);
+  boostPriority(out.proc && out.proc.pid);
   logger.info(`Démarrage ${opts.kind}`, out.file || '', out.encoder || '', opts.mime);
   return { ok: true, id: out.id, file: out.file || null, encoder: out.encoder || null };
 });
@@ -489,8 +490,34 @@ ipcMain.handle('app:stats', () => {
   const metrics = app.getAppMetrics();
   const cpu = metrics.reduce((sum, m) => sum + m.cpu.percentCPUUsage, 0) / os.cpus().length;
   const memMB = metrics.reduce((sum, m) => sum + (m.memory ? m.memory.workingSetSize : 0), 0) / 1024;
-  return { cpu, memMB };
+  return { cpu, memMB, gpuPriority: windowAudio.gpuPriority() };
 });
+
+/** Mesures techniques pour le diagnostic de performance (aucune donnée personnelle). */
+ipcMain.handle('app:diagnostic', () => ({
+  gpu: app.getGPUFeatureStatus(),
+  priority: windowAudio.priority(),
+  admin: process.platform === 'win32' ? isAdmin() : null,
+  processes: app.getAppMetrics().map((m) => ({ type: m.type, cpu: Math.round(m.cpu.percentCPUUsage * 10) / 10, memMB: Math.round((m.memory ? m.memory.workingSetSize : 0) / 1024) })),
+  cpus: os.cpus().length,
+  cpuModel: (os.cpus()[0] || {}).model,
+}));
+
+function isAdmin() {
+  try {
+    require('child_process').execFileSync('net', ['session'], { stdio: 'ignore', windowsHide: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Priorité processeur et GPU de MyStream (et de FFmpeg) face au jeu. */
+function boostPriority(extraPid) {
+  if (process.platform !== 'win32' || !win || win.isDestroyed()) return;
+  const gpu = app.getAppMetrics().filter((m) => m.type === 'GPU').map((m) => m.pid);
+  windowAudio.raisePriority([process.pid, win.webContents.getOSProcessId(), ...gpu, extraPid].filter(Boolean));
+}
 
 ipcMain.on('app:quit', () => {
   for (const id of outputs.keys()) stopOutput(id);
@@ -520,6 +547,8 @@ function createWindow() {
     },
   });
   win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+  // L'aperçu reste fluide même quand un jeu occupe la carte graphique.
+  win.webContents.once('did-finish-load', () => boostPriority());
   win.on('minimize', () => {
     if (!trayEnabled || process.platform === 'darwin') return;
     showTray();

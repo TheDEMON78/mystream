@@ -4,7 +4,7 @@
 // utilitaire natif window-audio.exe (native/window-audio.cpp).
 const path = require('path');
 const fs = require('fs');
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
 const { app } = require('electron');
 const logger = require('./logger');
 
@@ -113,10 +113,47 @@ function watchGames(id, on, send) {
   }
 }
 
+/* Priorité face au jeu --------------------------------------------------- */
+
+let priority = null;
+
+/**
+ * Donne aux processus de MyStream la priorité sur le jeu, pour le processeur
+ * et la carte graphique (comme OBS). La priorité GPU maximale demande de
+ * lancer MyStream en administrateur ; sinon on obtient la priorité « haute »
+ * quand Windows l'accorde.
+ */
+function raisePriority(pids) {
+  if (!available() || !pids.length) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    execFile(helperPath(), [`prio:${pids.join(',')}`], { windowsHide: true, timeout: 5000 }, (err, stdout) => {
+      if (err) {
+        logger.warn('Priorité impossible :', err.message);
+        return resolve(null);
+      }
+      priority = String(stdout)
+        .trim()
+        .split(/\r?\n/)
+        .map((line) => /^(\d+) cpu=(\d) gpu=(\w+)/.exec(line))
+        .filter(Boolean)
+        .map((m) => ({ pid: Number(m[1]), cpu: m[2] === '1', gpu: m[3] }));
+      logger.info('Priorité :', priority.map((p) => `${p.pid} cpu=${p.cpu} gpu=${p.gpu}`).join(' · '));
+      resolve(priority);
+    });
+  });
+}
+
+/** Meilleure priorité GPU obtenue : « realtime », « high » ou « none ». */
+function gpuPriority() {
+  if (!priority) return null;
+  const levels = priority.map((p) => p.gpu);
+  return levels.includes('realtime') ? 'realtime' : levels.includes('high') ? 'high' : 'none';
+}
+
 function stopAll() {
   for (const id of [...captures.keys()]) stop(id);
   gameWatch.users.clear();
   watchGames(null, false, gameWatch.send);
 }
 
-module.exports = { start, stop, stopAll, available, watchGames, currentGame: () => gameWatch.current };
+module.exports = { start, stop, stopAll, available, watchGames, currentGame: () => gameWatch.current, raisePriority, gpuPriority, priority: () => priority };

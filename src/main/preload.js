@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('api', {
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
   appInfo: () => ipcRenderer.invoke('app:info'),
   stats: () => ipcRenderer.invoke('app:stats'),
+  diagnostic: () => ipcRenderer.invoke('app:diagnostic'),
   encoders: () => ipcRenderer.invoke('encoders:list'),
   outputStart: (opts) => ipcRenderer.invoke('output:start', opts),
   outputChunk: (id, buffer) => ipcRenderer.send('output:chunk', id, new Uint8Array(buffer)),

@@ -635,6 +635,7 @@
           { label: 'Assistant de configuration…', action: () => MS.openWizard() },
           { label: 'Rechercher des mises à jour', action: () => this.checkUpdates() },
           { label: 'Ouvrir le dossier des journaux', action: () => window.api.openLogs() },
+          { label: 'Copier le diagnostic de performance', action: () => this.copyPerfDiagnostic() },
           { label: "Copier le diagnostic d'affichage", action: () => this.copyLayoutDiagnostic() },
           { separator: true },
           { label: 'Page du projet (GitHub)', action: () => window.api.openExternal('https://github.com/TheDEMON78/mystream') },
@@ -674,6 +675,31 @@
       const text = JSON.stringify(diag);
       window.api.copyText(text).then(
         () => MS.toast("Diagnostic d'affichage copié dans le presse-papiers : collez-le dans votre message.", 'success', 5000),
+        () => MS.toast('Impossible de copier le diagnostic dans le presse-papiers.', 'error')
+      );
+    },
+
+    /** Mesures de rendu et d'encodage, à coller dans un rapport de bug (ni clé de stream ni mot de passe). */
+    async copyPerfDiagnostic() {
+      const st = store().settings;
+      const s = MS.compositor.stats;
+      const out = MS.outputs.active.stream || MS.outputs.active.record;
+      const session = MS.live.session;
+      const round = (n) => Math.round(n * 10) / 10;
+      const diag = {
+        version: MS.appInfo.version,
+        platform: MS.appInfo.platform,
+        video: st.video,
+        stream: { service: st.stream.service, encoder: st.stream.encoder, used: MS.outputs.active.stream && MS.outputs.active.stream.encoder, videoBitrate: st.stream.videoBitrate, preset: st.stream.preset },
+        render: { fps: round(s.fps), renderMs: round(s.renderMs), sendMs: round(s.sendMs || 0), maxLateMs: round(s.maxLateMs), lagged: s.lagged, total: s.total, longTasks: s.longTasks, longTaskMs: Math.round(s.longTaskMs) },
+        encoder: out && out.progress,
+        lost: session && { total: session.lost(), encoder: session.encoderDrops, percent: round(session.lostPercent()), minutes: round(session.elapsed() / 60000) },
+        health: MS.outputs.health,
+        sources: (store().editScene() || { items: [] }).items.filter((it) => it.visible).map((it) => (store().source(it.sourceId) || {}).type),
+        system: await window.api.diagnostic().catch(() => null),
+      };
+      window.api.copyText(JSON.stringify(diag)).then(
+        () => MS.toast('Diagnostic de performance copié dans le presse-papiers : collez-le dans votre message.', 'success', 5000),
         () => MS.toast('Impossible de copier le diagnostic dans le presse-papiers.', 'error')
       );
     },
@@ -771,6 +797,7 @@
         if (document.hidden) return;
         try {
           cpu = await window.api.stats();
+          MS.gpuPriority = cpu.gpuPriority;
         } catch {
           cpu = null;
         }
