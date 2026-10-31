@@ -404,7 +404,12 @@
           },
           { key: 'server', type: 'text', label: 'Serveur', showIf: (v) => v.service !== 'restream' },
           { key: 'key', type: 'password', label: 'Clé de stream', showIf: (v) => v.service !== 'restream' },
-          { key: 'encoder', type: 'select', label: 'Encodeur vidéo', options: [{ value: 'auto', label: `Automatique (${(MS.encoders[0] || { label: 'x264' }).label})` }, ...MS.encoders.map((e) => ({ value: e.id, label: e.label }))] },
+          { key: 'encoder', type: 'select', label: 'Encodeur vidéo', options: [{ value: 'auto', label: `Automatique (${(MS.encoders[0] || { label: 'x264' }).label})` }, ...MS.encoders.map((e) => ({ value: e.id, label: e.label })), { value: 'copy', label: 'Sans réencodage (le plus léger)' }] },
+          {
+            type: 'info',
+            text: 'Sans réencodage : l’image n’est encodée qu’une fois, directement au débit choisi. C’est le réglage qui sollicite le moins la carte graphique, idéal quand un jeu l’occupe déjà. La qualité peut être un peu inférieure à NVENC à débit égal.',
+            showIf: (v) => v.encoder === 'copy',
+          },
           { key: 'videoBitrate', type: 'number', label: 'Débit vidéo (kb/s)', min: 500, max: 50000, step: 100 },
           {
             type: 'info',
@@ -523,12 +528,14 @@
         fields: [
           { key: 'confirmStopStream', type: 'checkbox', label: 'Demander confirmation avant d’arrêter le streaming' },
           { key: 'minimizeToTray', type: 'checkbox', label: 'Réduire dans la zone de notification' },
+          { key: 'autoHidePreview', type: 'checkbox', label: 'Pendant un live, masquer l’aperçu quand MyStream n’est pas au premier plan (allège la carte graphique en jeu)' },
           { type: 'section', label: 'Raccourcis clavier (fonctionnent même en jeu)' },
           ...Object.entries(MS.HOTKEY_LABELS).map(([key, label]) => ({ key: `hk_${key}`, type: 'hotkey', label })),
         ],
         values: {
           confirmStopStream: st.ui.confirmStopStream,
           minimizeToTray: st.ui.minimizeToTray,
+          autoHidePreview: st.ui.autoHidePreview,
           ...Object.fromEntries(Object.keys(MS.HOTKEY_LABELS).map((k) => [`hk_${k}`, (st.ui.hotkeys || {})[k] || ''])),
         },
       },
@@ -583,6 +590,7 @@
         general: {
           confirmStopStream: d.ui.confirmStopStream,
           minimizeToTray: d.ui.minimizeToTray,
+          autoHidePreview: d.ui.autoHidePreview,
           ...Object.fromEntries(Object.keys(MS.HOTKEY_LABELS).map((k) => [`hk_${k}`, ''])),
         },
       };
@@ -610,6 +618,7 @@
     const g = forms.general.values();
     st.ui.confirmStopStream = g.confirmStopStream;
     st.ui.minimizeToTray = g.minimizeToTray;
+    st.ui.autoHidePreview = g.autoHidePreview;
     const hotkeysBefore = JSON.stringify(st.ui.hotkeys);
     st.ui.hotkeys = Object.fromEntries(Object.keys(MS.HOTKEY_LABELS).map((k) => [k, g[`hk_${k}`]]));
     if (JSON.stringify(st.ui.hotkeys) !== hotkeysBefore) MS.hotkeys.apply();

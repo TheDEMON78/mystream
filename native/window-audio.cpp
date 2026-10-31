@@ -192,9 +192,20 @@ static int watchGames(DWORD ownPid) {
 // Priorité de MyStream face au jeu, comme OBS : sans elle, un jeu qui
 // occupe toute la carte graphique passe avant le rendu et l'encodage du
 // stream (saccades et gels). Priorité processeur « au-dessus de la normale »
-// et priorité GPU « temps réel » (administrateur) ou « haute » sinon.
+// et priorité GPU « temps réel » (administrateur) ou « haute » sinon, et pas
+// de bridage d'énergie par Windows.
 // Affiche une ligne par processus : <pid> cpu=<0|1> gpu=<realtime|high|none>.
 typedef LONG(WINAPI *SetGpuPriorityFn)(HANDLE, int);
+// PROCESS_POWER_THROTTLING_STATE (processthreadsapi.h), recopiée pour MinGW.
+struct MS_POWER_THROTTLING {
+  ULONG Version;
+  ULONG ControlMask;
+  ULONG StateMask;
+};
+typedef BOOL(WINAPI *SetProcessInfoFn)(HANDLE, int, LPVOID, DWORD);
+static const int kProcessPowerThrottling = 4;
+static const ULONG kThrottleExecutionSpeed = 0x1;
+static const ULONG kThrottleIgnoreTimerResolution = 0x4;
 static const int kGpuPriorityHigh = 4;
 static const int kGpuPriorityRealtime = 5;
 
@@ -211,6 +222,10 @@ static void enablePrivilege(const wchar_t *name) {
 static int raisePriority(const wchar_t *list) {
   HMODULE gdi = LoadLibraryW(L"gdi32.dll");
   SetGpuPriorityFn setGpu = gdi ? reinterpret_cast<SetGpuPriorityFn>(GetProcAddress(gdi, "D3DKMTSetProcessSchedulingPriorityClass")) : nullptr;
+  // Windows 11 bride (« EcoQoS ») les applications qui ne sont pas au premier
+  // plan, donc MyStream pendant qu'on joue : on le désactive pour nos processus.
+  HMODULE kernel = GetModuleHandleW(L"kernel32.dll");
+  SetProcessInfoFn setInfo = kernel ? reinterpret_cast<SetProcessInfoFn>(GetProcAddress(kernel, "SetProcessInformation")) : nullptr;
   enablePrivilege(L"SeIncreaseBasePriorityPrivilege");
   const wchar_t *p = list;
   while (*p) {
@@ -224,6 +239,13 @@ static int raisePriority(const wchar_t *list) {
       continue;
     }
     BOOL cpu = SetPriorityClass(h, ABOVE_NORMAL_PRIORITY_CLASS);
+    if (setInfo) {
+      MS_POWER_THROTTLING st = {1, kThrottleExecutionSpeed | kThrottleIgnoreTimerResolution, 0};
+      if (!setInfo(h, kProcessPowerThrottling, &st, sizeof(st))) {
+        st.ControlMask = kThrottleExecutionSpeed;  // Windows 10 : seule la vitesse d'exécution existe
+        setInfo(h, kProcessPowerThrottling, &st, sizeof(st));
+      }
+    }
     const char *gpu = "none";
     if (setGpu && setGpu(h, kGpuPriorityRealtime) == 0) gpu = "realtime";
     else if (setGpu && setGpu(h, kGpuPriorityHigh) == 0) gpu = "high";

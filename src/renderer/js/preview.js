@@ -20,6 +20,7 @@
       this.overlay = overlay;
       this.octx = overlay.getContext('2d');
       this.applyStudio();
+      this.applyVisibility();
 
       new ResizeObserver(() => this.layout()).observe(area);
       MS.on('video:resized', () => this.layout());
@@ -29,6 +30,9 @@
         this.select(null);
         this.applyStudio();
       });
+      for (const evt of ['outputs:changed', 'settings:changed', 'preview:visibility']) MS.on(evt, () => this.applyVisibility());
+      window.addEventListener('focus', () => this.applyVisibility());
+      window.addEventListener('blur', () => this.applyVisibility());
 
       overlay.addEventListener('pointerdown', (e) => this.onDown(e));
       overlay.addEventListener('pointermove', (e) => this.onMove(e));
@@ -50,6 +54,20 @@
       this.wrap = studio ? this.studioWrap : this.programWrap;
       this.wrap.append(this.overlay);
       this.layout();
+    },
+
+    /**
+     * Aperçu masqué (choix de l'utilisateur, ou automatiquement pendant un
+     * live quand MyStream est en arrière-plan) : le rendu et la capture
+     * continuent, seul l'affichage dans la fenêtre s'arrête.
+     */
+    applyVisibility() {
+      const ui = MS.store.settings.ui;
+      const auto = ui.autoHidePreview && MS.outputs.isAnyActive() && !document.hasFocus();
+      this.visible = ui.preview !== false && !auto;
+      this.area.classList.toggle('preview-off', !this.visible);
+      const b = MS.$('#btn-preview');
+      if (b) b.textContent = ui.preview !== false ? "Masquer l'aperçu" : "Afficher l'aperçu";
     },
 
     layout() {
@@ -244,6 +262,7 @@
     },
 
     drawOverlay() {
+      if (this.visible === false) return;
       const item = this.selectedItem();
       const r = item && item.visible ? MS.compositor.itemRect(item) : null;
       // On ne redessine que si la sélection a changé à l'écran.

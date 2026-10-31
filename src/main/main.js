@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain, desktopCapturer, dialog, shell, session, systemPreferences, Menu, net, globalShortcut, Tray, nativeImage, clipboard } = require('electron');
+const { app, BrowserWindow, ipcMain, desktopCapturer, dialog, shell, session, systemPreferences, Menu, net, globalShortcut, Tray, nativeImage, clipboard, powerSaveBlocker } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -20,6 +20,8 @@ app.commandLine.appendSwitch('disable-renderer-backgrounding');
 app.commandLine.appendSwitch('disable-background-timer-throttling');
 app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+// PC portables à deux cartes graphiques : toujours la plus puissante.
+app.commandLine.appendSwitch('force_high_performance_gpu');
 
 let win = null;
 
@@ -160,16 +162,25 @@ async function buildStreamOutput(out, opts) {
   }
   await restream.checkRtmp(url);
   const available = await encoders.detect(FFMPEG);
-  const enc = s.encoder === 'auto' || !available.includes(s.encoder) ? available[0] : s.encoder;
+  // Sans réencodage : la vidéo H.264 produite par MyStream part telle quelle.
+  // Un seul encodage au lieu de deux et aucun décodage : le plus léger pour
+  // la carte graphique quand un jeu l'occupe déjà.
+  const direct = s.encoder === 'copy' && /avc1|h264/i.test(opts.mime);
+  const enc = direct ? 'copy' : s.encoder === 'auto' || !available.includes(s.encoder) ? available[0] : s.encoder;
   out.encoder = enc;
+  const video = direct
+    ? ['-fflags', '+genpts', '-i', 'pipe:0', '-c:v', 'copy']
+    : [
+        // Décodage matériel du flux d'entrée quand l'encodage l'est aussi : le
+        // processeur n'a alors presque plus rien à faire.
+        ...(enc === 'x264' ? [] : ['-hwaccel', 'auto']),
+        '-i', 'pipe:0',
+        ...encoders.videoArgs(enc, { bitrate: Number(s.videoBitrate) || 4500, preset: s.preset, fps }),
+        '-r', String(fps), '-fps_mode', 'cfr',
+      ];
   const args = [
     '-hide_banner', '-loglevel', 'error', '-nostats', '-progress', 'pipe:1',
-    // Décodage matériel du flux d'entrée quand l'encodage l'est aussi : le
-    // processeur n'a alors presque plus rien à faire.
-    ...(enc === 'x264' ? [] : ['-hwaccel', 'auto']),
-    '-i', 'pipe:0',
-    ...encoders.videoArgs(enc, { bitrate: Number(s.videoBitrate) || 4500, preset: s.preset, fps }),
-    '-r', String(fps), '-fps_mode', 'cfr',
+    ...video,
     '-c:a', 'aac', '-b:a', `${Number(s.audioBitrate) || 160}k`, '-ar', '48000', '-ac', '2',
     '-f', 'flv', url,
   ];
@@ -471,10 +482,18 @@ ipcMain.handle('update:state', () => updater.getState());
 ipcMain.on('update:install', () => updater.install());
 // Streaming, enregistrement ou reconnexion en cours (état tenu par l'interface).
 let outputsBusy = false;
+let blockerId = null;
 ipcMain.on('outputs:busy', (_e, busy) => {
   if (Boolean(busy) === outputsBusy) return;
   outputsBusy = Boolean(busy);
   updater.setBusy(outputsBusy);
+  // Pendant un live ou un enregistrement, Windows ne doit ni mettre MyStream
+  // en veille ni le ralentir pour économiser l'énergie.
+  if (outputsBusy && blockerId == null) blockerId = powerSaveBlocker.start('prevent-app-suspension');
+  else if (!outputsBusy && blockerId != null) {
+    powerSaveBlocker.stop(blockerId);
+    blockerId = null;
+  }
 });
 
 ipcMain.handle('app:info', () => ({

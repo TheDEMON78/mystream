@@ -6,6 +6,7 @@ const { execFile } = require('child_process');
 
 const LABELS = {
   x264: 'Logiciel (x264)',
+  copy: 'Sans réencodage',
   h264_nvenc: 'NVIDIA NVENC H.264',
   h264_qsv: 'Intel Quick Sync H.264',
   h264_amf: 'AMD AMF H.264',

@@ -36,7 +36,9 @@
       // Le flux de streaming est réencodé par FFmpeg : on lui envoie une source
       // trois fois plus riche que le débit final, pour que ce second encodage
       // ne dégrade presque pas l'image (le flux reste local, sa taille ne coûte rien).
-      const vb = this.kind === 'record' ? settings.output.videoBitrate : MS.clamp(settings.stream.videoBitrate * 3, 12000, 60000);
+      // Sans réencodage, ce flux part tel quel : il est produit directement au débit du stream, constant.
+      const direct = this.kind === 'stream' && settings.stream.encoder === 'copy';
+      const vb = this.kind === 'record' ? settings.output.videoBitrate : direct ? settings.stream.videoBitrate : MS.clamp(settings.stream.videoBitrate * 3, 12000, 60000);
       const ab = this.kind === 'record' ? settings.output.audioBitrate : settings.stream.audioBitrate;
       // Une image clé toutes les 2 s : indispensable pour que l'enregistrement
       // reste lisible après une coupure et pour la navigation dans la vidéo.
@@ -45,6 +47,7 @@
         videoBitsPerSecond: vb * 1000,
         audioBitsPerSecond: ab * 1000,
         videoKeyFrameIntervalDuration: 2000,
+        ...(direct ? { videoBitrateMode: 'constant' } : {}),
       });
       this.recorder.ondataavailable = (e) => {
         if (!e.data.size) return;
@@ -142,7 +145,7 @@
         this.active[kind] = out;
         if (kind === 'record') MS.toast(`Enregistrement démarré : ${out.file}`, 'info', 3500);
         else {
-          const enc = (MS.encoders.find((e) => e.id === out.encoder) || { label: out.encoder }).label;
+          const enc = out.encoder === 'copy' ? 'sans réencodage' : (MS.encoders.find((e) => e.id === out.encoder) || { label: out.encoder }).label;
           MS.toast(`Streaming démarré (encodeur : ${enc}).`, 'info', 3500);
         }
       } catch (e) {
@@ -247,7 +250,11 @@
         level = 'warn';
         if (longMs < 200 && stats.renderMs < this.interval() / 2) {
           // MyStream calcule vite mais attend : c'est la carte graphique qui est saturée (souvent par le jeu).
-          message = `Carte graphique saturée (${lagged} images manquées en 2 s), sans doute par le jeu : limitez ses images par seconde (VSync ou limite à 120 i/s)${MS.gpuPriority === 'realtime' ? '' : ', ou lancez MyStream en tant qu’administrateur pour qu’il passe avant le jeu sur la carte graphique, comme OBS'}.`;
+          const tips = ['limitez les images par seconde du jeu (VSync ou limite à 120 i/s)'];
+          if (MS.store.settings.ui.preview !== false) tips.push('masquez l’aperçu');
+          if (MS.store.settings.stream.encoder !== 'copy') tips.push('choisissez l’encodeur « Sans réencodage » (Paramètres > Stream)');
+          if (MS.gpuPriority !== 'realtime') tips.push('lancez MyStream en tant qu’administrateur pour qu’il passe avant le jeu, comme OBS');
+          message = `Carte graphique saturée (${lagged} images manquées en 2 s), sans doute par le jeu : ${tips.join(', ')}.`;
         } else {
           message = `Rendu surchargé (${lagged} images manquées en 2 s) : réduisez la résolution ou le nombre d'images par seconde, ou retirez des sources lourdes (pages web animées, captures multiples).`;
         }

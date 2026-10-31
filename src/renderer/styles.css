@@ -170,6 +170,24 @@ button {
   position: relative;
   box-shadow: 0 0 0 1px var(--border);
 }
+/* Aperçu masqué : le navigateur n'a plus à afficher le canevas à chaque image. */
+#preview-area.preview-off .canvas-wrap canvas {
+  visibility: hidden;
+}
+#preview-area.preview-off .canvas-wrap::after {
+  content: 'Aperçu masqué pour alléger la carte graphique. Le live et l’enregistrement continuent normalement.';
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  text-align: center;
+  color: var(--muted);
+}
+#preview-toolbar .spacer {
+  flex: 1;
+}
 #preview-area.studio #preview-wrap {
   box-shadow: 0 0 0 2px var(--danger);
 }

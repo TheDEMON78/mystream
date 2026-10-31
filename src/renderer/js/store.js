@@ -30,6 +30,8 @@
           studio: false,
           docks: { scenes: true, sources: true, mixer: true, transitions: true, controls: true, chat: true, liveinfo: true },
           liveBar: true,
+          preview: true, // aperçu affiché
+          autoHidePreview: false, // masquer l'aperçu quand MyStream n'est pas au premier plan pendant un live
           layout: null, // disposition des docks (null = disposition d'origine)
           layouts: {}, // dispositions enregistrées par nom
           minimizeToTray: false,

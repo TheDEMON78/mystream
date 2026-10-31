@@ -419,7 +419,7 @@
       if (!this.transition) this.drawScene(ctx, current, 1);
 
       // Mode studio : l'aperçu est rendu directement à la taille affichée.
-      if (MS.store.settings.ui.studio && this.studioCanvas.width > 1) {
+      if (MS.store.settings.ui.studio && MS.preview.visible !== false && this.studioCanvas.width > 1) {
         const sc = this.studioCtx;
         sc.setTransform(1, 0, 0, 1, 0, 0);
         sc.globalAlpha = 1;

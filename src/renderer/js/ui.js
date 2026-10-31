@@ -84,6 +84,7 @@
           if (item) MS.openFilters(item.sourceId);
         },
         studio: () => store().setStudio(!store().settings.ui.studio),
+        'preview-toggle': () => this.togglePreview(),
         transition: () => MS.compositor.switchScene(store().data.previewSceneId),
         'chat-clear': () => MS.chat.clear(),
         'chat-settings': () => MS.openSettings('chat'),
@@ -513,7 +514,7 @@
       const item = MS.preview.selectedItem();
       const src = item && store().source(item.sourceId);
       MS.$('#selected-label').textContent = src ? src.name : 'Aucune source sélectionnée';
-      for (const b of document.querySelectorAll('#preview-toolbar .btn')) b.disabled = !src;
+      for (const b of document.querySelectorAll('#preview-toolbar .btn:not(#btn-preview)')) b.disabled = !src;
     },
 
     /* Chat ----------------------------------------------------------------- */
@@ -620,6 +621,7 @@
         ],
         view: [
           { label: check(ui.studio, 'Mode studio'), action: () => store().setStudio(!ui.studio) },
+          { label: check(ui.preview !== false, 'Aperçu'), action: () => this.togglePreview() },
           { label: check(ui.docks.chat, 'Chat'), action: () => this.toggleDock('chat') },
           {
             label: check(ui.liveBar !== false, 'Barre « En direct » pendant le live'),
@@ -702,6 +704,13 @@
         () => MS.toast('Diagnostic de performance copié dans le presse-papiers : collez-le dans votre message.', 'success', 5000),
         () => MS.toast('Impossible de copier le diagnostic dans le presse-papiers.', 'error')
       );
+    },
+
+    togglePreview() {
+      const ui = store().settings.ui;
+      ui.preview = ui.preview === false;
+      store().save();
+      MS.emit('preview:visibility');
     },
 
     toggleDock(key) {
