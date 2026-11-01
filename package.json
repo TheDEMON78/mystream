@@ -45,8 +45,7 @@
     ],
     "win": {
       "target": [
-        "nsis",
-        "portable"
+        "nsis"
       ],
       "extraResources": [
         {
@@ -83,9 +82,6 @@
       "runAfterFinish": true,
       "deleteAppDataOnUninstall": false,
       "uninstallDisplayName": "MyStream ${version}"
-    },
-    "portable": {
-      "artifactName": "${productName}-${version}-win-portable.${ext}"
     },
     "linux": {
       "target": [

@@ -95,7 +95,7 @@ Les versions compilées sont publiées automatiquement dans les [Releases](https
 
 | Système | Fichier |
 | --- | --- |
-| Windows | `MyStream-x.y.z-win-setup.exe` (installateur en français aux couleurs de MyStream : choix du dossier, raccourcis bureau et menu Démarrer > BloopStudio) ou `-win-portable.exe` |
+| Windows | `MyStream-x.y.z-win-setup.exe` (installateur en français aux couleurs de MyStream : choix du dossier, raccourcis bureau et menu Démarrer > BloopStudio) |
 | Linux | `.AppImage` ou `.deb` |
 | macOS | `.dmg` à glisser dans Applications (non signé : clic droit → *Ouvrir* au premier lancement) |
 

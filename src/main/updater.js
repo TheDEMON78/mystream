@@ -2,7 +2,7 @@
 
 // Mises à jour automatiques depuis les releases GitHub du projet.
 // Windows (installateur) et Linux (AppImage) s'installent tout seuls ; les
-// autres formats (portable, .deb, macOS non signé) affichent juste un lien.
+// autres formats (.deb, macOS non signé) affichent juste un lien.
 // Rien n'est vérifié ni téléchargé pendant un streaming ou un enregistrement :
 // tout est reporté à la fin, pour ne prendre ni bande passante ni processeur.
 const { app, shell } = require('electron');
