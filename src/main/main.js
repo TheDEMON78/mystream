@@ -472,6 +472,10 @@ ipcMain.on('browser:create', (_e, id, opts) => browserSources.create(id, opts, s
 ipcMain.on('browser:destroy', (_e, id) => browserSources.destroy(id));
 ipcMain.on('browser:reload', (_e, id) => browserSources.reload(id));
 ipcMain.on('browser:ack', (_e, id) => browserSources.ack(id));
+ipcMain.on('browser:audio-enabled', (e) => {
+  e.returnValue = browserSources.audioEnabled(e.sender.id);
+});
+ipcMain.on('browser:audio', (e, pcm) => browserSources.audio(e.sender.id, pcm));
 kickChat.init(ipcMain, send);
 ipcMain.on('winaudio:start', (_e, id, captureId) => windowAudio.start(id, captureId, send));
 ipcMain.on('winaudio:stop', (_e, id) => windowAudio.stop(id));

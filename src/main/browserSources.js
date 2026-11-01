@@ -2,6 +2,7 @@
 
 // Sources « Navigateur » : chaque page est rendue hors écran par Chromium et
 // ses images sont transmises à l'interface, qui les dessine dans la scène.
+const path = require('path');
 const { BrowserWindow } = require('electron');
 
 const DEFAULT_CSS = 'body { background-color: rgba(0, 0, 0, 0); margin: 0px auto; overflow: hidden; }';
@@ -86,6 +87,10 @@ function create(id, opts, send) {
     webPreferences: {
       offscreen: true,
       partition: 'persist:browser-sources',
+      preload: path.join(__dirname, 'browserPreload.js'),
+      // Son capturé : les fichiers audio des alertes viennent souvent d'un autre site
+      // (CDN) ; sans cette exception, Chromium les rendrait muets pour la capture.
+      webSecurity: !opts.audio,
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -94,9 +99,10 @@ function create(id, opts, send) {
   });
   const wc = win.webContents;
   wc.setFrameRate(Math.max(1, Math.min(60, Number(opts.fps) || 30)));
-  wc.setAudioMuted(!opts.audio);
+  // Le son passe par le mixeur de MyStream (capturé dans la page), jamais directement par les haut-parleurs.
+  wc.setAudioMuted(true);
   wc.setWindowOpenHandler(() => ({ action: 'deny' }));
-  const state = { win, send, busy: false, image: null, dirty: null, full: true, scale: 1 };
+  const state = { win, send, audio: Boolean(opts.audio), busy: false, image: null, dirty: null, full: true, scale: 1 };
   wc.on('paint', (_e, dirty, image) => {
     const { width: w, height: h } = image.getSize();
     if (!w || !h) return;
@@ -107,6 +113,17 @@ function create(id, opts, send) {
     state.dirty = union(state.dirty, dirty);
     flush(id, send);
   });
+  // Son de la page : chaque <audio>/<video> qui joue (alertes) est relié à la capture.
+  if (opts.audio) {
+    wc.on('dom-ready', () => {
+      wc.executeJavaScript(`(() => {
+        const capture = window.__myStreamCaptureMedia;
+        if (!capture) return;
+        window.addEventListener('play', (e) => capture(e.target), true);
+        document.querySelectorAll('audio, video').forEach((el) => !el.paused && capture(el));
+      })()`).catch(() => {});
+    });
+  }
   wc.on('did-finish-load', () => {
     const css = opts.css === undefined ? DEFAULT_CSS : opts.css;
     if (css) wc.insertCSS(css).catch(() => {});
@@ -127,8 +144,26 @@ function reload(id) {
   if (s) s.win.webContents.reloadIgnoringCache();
 }
 
+/** Source « Navigateur » d'une page (d'après son webContents). */
+function fromContents(wcId) {
+  for (const [id, s] of sources) if (!s.win.isDestroyed() && s.win.webContents.id === wcId) return { id, state: s };
+  return null;
+}
+
+/** Son de la page à envoyer au mixeur ? (demandé par le préchargement de la page) */
+function audioEnabled(wcId) {
+  const s = fromContents(wcId);
+  return Boolean(s && s.state.audio);
+}
+
+/** Échantillons capturés dans la page : transmis à l'interface comme le son d'une fenêtre. */
+function audio(wcId, pcm) {
+  const s = fromContents(wcId);
+  if (s && s.state.audio) s.state.send('browser:audio', { id: s.id, data: pcm });
+}
+
 function destroyAll() {
   for (const id of [...sources.keys()]) destroy(id);
 }
 
-module.exports = { create, destroy, reload, destroyAll, ack, DEFAULT_CSS };
+module.exports = { create, destroy, reload, destroyAll, ack, audioEnabled, audio, DEFAULT_CSS };

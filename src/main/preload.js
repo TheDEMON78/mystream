@@ -39,6 +39,7 @@ contextBridge.exposeInMainWorld('api', {
   browserAck: (id) => ipcRenderer.send('browser:ack', id),
   onBrowserFrame: listen('browser:frame'),
   onBrowserError: listen('browser:error'),
+  onBrowserAudio: listen('browser:audio'),
   winAudioStart: (id, captureId) => ipcRenderer.send('winaudio:start', id, captureId),
   winAudioStop: (id) => ipcRenderer.send('winaudio:stop', id),
   onWinAudioData: listen('winaudio:data'),

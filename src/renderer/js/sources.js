@@ -773,6 +773,7 @@
     async start() {
       this.canvas = document.createElement('canvas');
       this.ctx = this.canvas.getContext('2d');
+      this.audioOn = Boolean(this.src.settings.audio);
       this.signature = this.sig();
       window.api.browserCreate(this.src.id, { ...this.src.settings });
     }
@@ -782,8 +783,25 @@
     }
     update() {
       if (this.sig() === this.signature) return;
+      // Son activé ou coupé : la voie du mixeur est à créer ou à retirer.
+      if (Boolean(this.src.settings.audio) !== this.audioOn) {
+        MS.runtimes.dispose(this.src.id);
+        MS.runtimes.ensure(this.src);
+        return;
+      }
       this.signature = this.sig();
       window.api.browserCreate(this.src.id, { ...this.src.settings });
+    }
+    hasAudio() {
+      return this.audioOn;
+    }
+    /** Son de la page, capturé dans la page et reçu comme celui d'une fenêtre. */
+    audioNode(ctx) {
+      if (!this.pcm) this.pcm = new AudioWorkletNode(ctx, 'pcm-player', { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [2] });
+      return this.pcm;
+    }
+    pushAudio(bytes) {
+      pushPcm(this, bytes);
     }
     /** Reçoit uniquement la zone modifiée, déjà convertie en RGBA par le processus principal. */
     onFrame({ width, height, x, y, w, h, data }) {
@@ -834,6 +852,10 @@
     MS.toast(`Son de « ${rt.src.name} » : ${error}`, 'error', 8000);
   });
 
+  window.api.onBrowserAudio(({ id, data }) => {
+    const rt = MS.runtimes.get(id);
+    if (rt && rt.pushAudio) rt.pushAudio(data);
+  });
   window.api.onBrowserError((e) => {
     const rt = MS.runtimes.get(e.id);
     if (rt) rt.fail(new Error(e.error));
@@ -1060,7 +1082,7 @@
         { key: 'width', type: 'number', label: 'Largeur', min: 16, max: 4096 },
         { key: 'height', type: 'number', label: 'Hauteur', min: 16, max: 4096 },
         { key: 'fps', type: 'number', label: 'Images par seconde', min: 1, max: 60 },
-        { key: 'audio', type: 'checkbox', label: 'Jouer le son de la page (sortie du PC)' },
+        { key: 'audio', type: 'checkbox', label: 'Envoyer le son de la page dans le stream (réglable dans le mixeur)' },
         { key: 'css', type: 'textarea', label: 'CSS personnalisé' },
         { type: 'info', text: 'Idéal pour les alertes (StreamElements, Streamlabs…) ou le chat de Restream (/chat.html).' },
       ],
