@@ -9,6 +9,7 @@ const { app, screen, desktopCapturer } = require('electron');
 const logger = require('./logger');
 
 const captures = new Map();
+const PCM_BATCH = 48000 * 8 * 0.02; // 20 ms de stéréo en flottants 32 bits
 
 function helperPath() {
   const p = app.isPackaged
@@ -39,11 +40,16 @@ function start(id, captureId, send) {
   captures.set(id, cap);
 
   proc.stdout.on('data', (chunk) => {
-    // Ne transmet que des trames complètes (2 canaux × 4 octets).
-    let buf = cap.rest ? Buffer.concat([cap.rest, chunk]) : chunk;
+    // Paquets regroupés par 20 ms (au lieu de 10) : deux fois moins de messages
+    // vers l'interface, sans latence sensible. Seules des trames complètes partent.
+    const buf = cap.rest ? Buffer.concat([cap.rest, chunk]) : chunk;
+    if (buf.length < PCM_BATCH) {
+      cap.rest = Buffer.from(buf);
+      return;
+    }
     const usable = buf.length - (buf.length % 8);
     cap.rest = usable < buf.length ? Buffer.from(buf.subarray(usable)) : null;
-    if (usable) send('winaudio:data', { id, data: new Uint8Array(buf.buffer, buf.byteOffset, usable).slice() });
+    send('winaudio:data', { id, data: new Uint8Array(buf.buffer, buf.byteOffset, usable).slice() });
   });
   // Lignes « state … » : état de la capture (programme attendu, capturé, nom du programme).
   let pending = '';

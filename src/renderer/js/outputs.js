@@ -53,7 +53,8 @@
         if (!e.data.size) return;
         this.queue = this.queue.then(() => e.data.arrayBuffer()).then((buf) => window.api.outputChunk(this.id, buf));
       };
-      this.recorder.start(250);
+      // Blocs de 100 ms : l'image part vers FFmpeg (et les spectateurs) plus tôt.
+      this.recorder.start(100);
       this.startedAt = performance.now();
     }
 

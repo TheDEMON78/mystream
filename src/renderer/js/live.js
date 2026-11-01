@@ -306,8 +306,18 @@
         ),
         this.chatChart(r)
       );
-      MS.modal({ title: 'Fin du live', content, width: 640, buttons: [{ label: 'Historique…', value: 'history', left: true }, { label: 'Fermer', value: true, primary: true }] }).then((v) => {
+      MS.modal({
+        title: 'Fin du live',
+        content,
+        width: 640,
+        buttons: [
+          { label: 'Historique…', value: 'history', left: true },
+          { label: 'Copier le diagnostic', value: 'diag', left: true },
+          { label: 'Fermer', value: true, primary: true },
+        ],
+      }).then((v) => {
         if (v === 'history') this.showHistory();
+        if (v === 'diag') MS.ui.copyPerfDiagnostic();
       });
     },
 

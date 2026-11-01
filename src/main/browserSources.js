@@ -3,6 +3,7 @@
 // Sources « Navigateur » : chaque page est rendue hors écran par Chromium et
 // ses images sont transmises à l'interface, qui les dessine dans la scène.
 const path = require('path');
+const { Worker } = require('worker_threads');
 const { BrowserWindow } = require('electron');
 
 const DEFAULT_CSS = 'body { background-color: rgba(0, 0, 0, 0); margin: 0px auto; overflow: hidden; }';
@@ -15,32 +16,23 @@ function union(a, b) {
   return { x, y, width: Math.max(a.x + a.width, b.x + b.width) - x, height: Math.max(a.y + a.height, b.y + b.height) - y };
 }
 
-/**
- * Conversion BGRA prémultiplié (Chromium) -> RGBA (ImageData), faite ici
- * plutôt que dans l'interface pour ne pas ralentir la boucle de rendu.
- */
-function toRgba(buf) {
-  const px = buf.byteOffset % 4 ? new Uint32Array(Uint8Array.from(buf).buffer) : new Uint32Array(buf.buffer, buf.byteOffset, buf.length / 4);
-  for (let i = 0; i < px.length; i++) {
-    const p = px[i];
-    const a = p >>> 24;
-    if (a === 0) {
-      px[i] = 0;
-    } else if (a === 255) {
-      px[i] = (p & 0xff00ff00) | ((p & 0xff) << 16) | ((p >>> 16) & 0xff);
-    } else {
-      const k = 255 / a;
-      const r = Math.min(255, ((p >>> 16) & 0xff) * k);
-      const g = Math.min(255, ((p >>> 8) & 0xff) * k);
-      const b = Math.min(255, (p & 0xff) * k);
-      px[i] = (a << 24) | (b << 16) | (g << 8) | r;
-    }
+// Conversion des pixels dans un thread à part (voir bgraWorker.js).
+let worker = null;
+function convert(frame) {
+  if (!worker) {
+    worker = new Worker(path.join(__dirname, 'bgraWorker.js'));
+    worker.on('message', (msg) => {
+      const s = sources.get(msg.id);
+      if (s && s.win && !s.win.isDestroyed()) s.send('browser:frame', { ...msg, data: new Uint8Array(msg.data) });
+      else if (s) s.busy = false;
+    });
+    worker.on('error', () => (worker = null));
   }
-  return new Uint8Array(px.buffer, px.byteOffset, px.byteLength);
+  worker.postMessage(frame, [frame.data]);
 }
 
 /** Envoie la zone modifiée, une image à la fois : les suivantes sont fusionnées en attendant. */
-function flush(id, send) {
+function flush(id) {
   const s = sources.get(id);
   if (!s || s.busy || !s.image || !s.dirty) return;
   const { width, height } = s.image.getSize();
@@ -55,14 +47,16 @@ function flush(id, send) {
   if (r.width <= 0 || r.height <= 0) return;
   const part = r.width === width && r.height === height ? s.image : s.image.crop(r);
   s.busy = true;
-  send('browser:frame', { id, width, height, x: r.x, y: r.y, w: r.width, h: r.height, data: toRgba(part.toBitmap()) });
+  const bmp = part.toBitmap();
+  const data = bmp.byteOffset === 0 && bmp.byteLength === bmp.buffer.byteLength ? bmp.buffer : bmp.buffer.slice(bmp.byteOffset, bmp.byteOffset + bmp.byteLength);
+  convert({ id, width, height, x: r.x, y: r.y, w: r.width, h: r.height, data });
 }
 
 function ack(id) {
   const s = sources.get(id);
   if (!s) return;
   s.busy = false;
-  flush(id, s.send);
+  flush(id);
 }
 
 function destroy(id) {
@@ -98,7 +92,8 @@ function create(id, opts, send) {
     },
   });
   const wc = win.webContents;
-  wc.setFrameRate(Math.max(1, Math.min(60, Number(opts.fps) || 30)));
+  // Jamais plus d'images que le canevas n'en affiche : le surplus serait perdu.
+  wc.setFrameRate(Math.max(1, Math.min(Number(opts.maxFps) || 60, Number(opts.fps) || 30)));
   // Le son passe par le mixeur de MyStream (capturé dans la page), jamais directement par les haut-parleurs.
   wc.setAudioMuted(true);
   wc.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -111,7 +106,7 @@ function create(id, opts, send) {
     state.scale = w / width;
     state.image = image;
     state.dirty = union(state.dirty, dirty);
-    flush(id, send);
+    flush(id);
   });
   // Son de la page : chaque <audio>/<video> qui joue (alertes) est relié à la capture.
   if (opts.audio) {

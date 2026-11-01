@@ -23,6 +23,9 @@ app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
 // Capture des fenêtres par Windows Graphics Capture (carte graphique) plutôt que GDI, lent avec les jeux.
 app.commandLine.appendSwitch('enable-features', 'AllowWgcWindowCapturer');
+// L'affichage de la fenêtre ne se cale plus sur l'écran : quand un jeu occupe la
+// carte graphique, attendre la synchronisation verticale bloquait tout le rendu.
+app.commandLine.appendSwitch('disable-gpu-vsync');
 // PC portables à deux cartes graphiques : toujours la plus puissante.
 app.commandLine.appendSwitch('force_high_performance_gpu');
 
@@ -148,6 +151,10 @@ function buildRecordOutput(out, opts) {
   startFfmpeg(out, args);
 }
 
+// Le flux de MyStream décrit ses pistes dès l'en-tête : inutile que FFmpeg
+// analyse plusieurs secondes de vidéo avant de commencer à diffuser.
+const LOW_DELAY_INPUT = ['-probesize', '1M', '-analyzeduration', '500000'];
+
 async function buildStreamOutput(out, opts) {
   if (!FFMPEG) throw new Error('FFmpeg est introuvable : le streaming est indisponible.');
   const s = opts.settings.stream;
@@ -172,11 +179,13 @@ async function buildStreamOutput(out, opts) {
   const enc = direct ? 'copy' : s.encoder === 'auto' || !available.includes(s.encoder) ? available[0] : s.encoder;
   out.encoder = enc;
   const video = direct
-    ? ['-fflags', '+genpts', '-i', 'pipe:0', '-c:v', 'copy']
+    ? [...LOW_DELAY_INPUT, '-fflags', '+genpts+nobuffer', '-i', 'pipe:0', '-c:v', 'copy']
     : [
         // Décodage matériel du flux d'entrée quand l'encodage l'est aussi : le
         // processeur n'a alors presque plus rien à faire.
         ...(enc === 'x264' ? [] : ['-hwaccel', 'auto']),
+        ...LOW_DELAY_INPUT,
+        '-fflags', '+nobuffer',
         '-i', 'pipe:0',
         ...encoders.videoArgs(enc, { bitrate: Number(s.videoBitrate) || 4500, preset: s.preset, fps }),
         '-r', String(fps), '-fps_mode', 'cfr',

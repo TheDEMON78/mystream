@@ -801,7 +801,7 @@
       this.ctx = this.canvas.getContext('2d');
       this.audioOn = Boolean(this.src.settings.audio);
       this.signature = this.sig();
-      window.api.browserCreate(this.src.id, { ...this.src.settings });
+      window.api.browserCreate(this.src.id, { ...this.src.settings, maxFps: MS.store.settings.video.fps });
     }
     sig() {
       const s = this.src.settings;
@@ -816,7 +816,7 @@
         return;
       }
       this.signature = this.sig();
-      window.api.browserCreate(this.src.id, { ...this.src.settings });
+      window.api.browserCreate(this.src.id, { ...this.src.settings, maxFps: MS.store.settings.video.fps });
     }
     hasAudio() {
       return this.audioOn;
@@ -1111,7 +1111,8 @@
     browser: {
       label: 'Navigateur',
       glyph: '🌐',
-      defaults: () => ({ url: '', width: 800, height: 600, fps: 60, css: MS.appInfo.defaultBrowserCss, audio: false }),
+      // 30 i/s suffisent aux alertes et widgets, et coûtent deux fois moins que 60.
+      defaults: () => ({ url: '', width: 800, height: 600, fps: 30, css: MS.appInfo.defaultBrowserCss, audio: true }),
       create: (src) => new BrowserRuntime(src),
       fields: () => [
         { key: 'url', type: 'text', label: 'URL (ou chemin d’un fichier HTML local)', placeholder: 'https://…' },

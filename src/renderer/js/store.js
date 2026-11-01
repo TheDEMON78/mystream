@@ -33,7 +33,7 @@
           docks: { scenes: true, sources: true, mixer: true, transitions: true, controls: true, chat: true, liveinfo: true },
           liveBar: true,
           preview: true, // aperçu affiché
-          autoHidePreview: false, // masquer l'aperçu quand MyStream n'est pas au premier plan pendant un live
+          autoHidePreview: true, // masquer l'aperçu quand MyStream n'est pas au premier plan pendant un live
           layout: null, // disposition des docks (null = disposition d'origine)
           layouts: {}, // dispositions enregistrées par nom
           minimizeToTray: false,
@@ -75,6 +75,13 @@
       this.fresh = !saved; // premier lancement : l'assistant de configuration s'ouvrira
       if (this.data.settings.remote.password == null) {
         this.data.settings.remote.password = MS.remote.newPassword();
+        this.save();
+      }
+      // Mise à niveau unique : aperçu masqué en jeu pendant un live (allège la carte graphique).
+      const done = (this.data.migrations = this.data.migrations || {});
+      if (!done.autoHidePreview) {
+        done.autoHidePreview = true;
+        this.data.settings.ui.autoHidePreview = true;
         this.save();
       }
       if (!this.data.scenes.length) this.addScene('Scène', true);
