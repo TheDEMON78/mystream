@@ -224,19 +224,42 @@
           getters[f.key] = () => pw.value;
           break;
         }
+        case 'program': {
+          // Liste des programmes ouverts, plus « Autre programme… » pour en saisir un qui n'est pas lancé.
+          const OTHER = '\u0000other';
+          const apps = f.apps || [];
+          const label = (a) => (a.title ? `${a.exe} — ${a.title.length > 40 ? `${a.title.slice(0, 40)}…` : a.title}` : a.exe);
+          const group = (name, list) => (list.length ? el('optgroup', { label: name }, list.map((a) => el('option', { value: a.exe, text: label(a) }))) : null);
+          const known = apps.some((a) => a.exe.toLowerCase() === String(v || '').toLowerCase());
+          const select = el(
+            'select',
+            { class: 'input' },
+            el('option', { value: '', text: 'Choisir un programme…', disabled: true, selected: !v }),
+            v && !known ? el('option', { value: v, text: `${v} (pas lancé pour le moment)` }) : null,
+            group('Utilisent le son (même en arrière-plan)', apps.filter((a) => a.kind === 'audio')),
+            group('Fenêtres ouvertes', apps.filter((a) => a.kind === 'window')),
+            el('option', { value: OTHER, text: 'Autre programme…' })
+          );
+          if (v) select.value = apps.find((a) => a.exe.toLowerCase() === v.toLowerCase())?.exe || v;
+          const other = el('input', { class: 'input', type: 'text', placeholder: 'Nom du fichier, ex. Discord.exe', hidden: true, oninput: changed });
+          select.addEventListener('change', () => {
+            other.hidden = select.value !== OTHER;
+            if (!other.hidden) other.focus();
+            changed();
+          });
+          input = el('div', { class: 'program-picker' }, select, other);
+          getters[f.key] = () => (select.value === OTHER ? other.value.trim() : select.value);
+          break;
+        }
         case 'capture': {
           const picker = MS.capturePicker(values, changed, f.kinds);
           input = picker.element;
           Object.assign(getters, picker.getters);
           break;
         }
-        default: {
-          // Suggestions éventuelles (liste déroulante qui laisse saisir autre chose).
-          const list = f.suggestions && f.suggestions.length ? el('datalist', { id: `dl-${f.key}-${MS.uid()}` }, f.suggestions.map((o) => el('option', { value: o }))) : null;
-          const text = el('input', { class: 'input', type: 'text', value: v ?? '', placeholder: f.placeholder || '', list: list ? list.id : null, oninput: changed });
-          input = list ? el('div', {}, text, list) : text;
-          getters[f.key] = () => text.value;
-        }
+        default:
+          input = el('input', { class: 'input', type: 'text', value: v ?? '', placeholder: f.placeholder || '', oninput: changed });
+          getters[f.key] = () => input.value;
       }
       root.append(el('label', { class: `field ${f.type === 'capture' ? 'wide' : ''}` }, el('span', { text: f.label }), input));
     }

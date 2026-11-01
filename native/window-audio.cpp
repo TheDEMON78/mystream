@@ -414,19 +414,54 @@ static const GUID kIIDDeviceEnumerator = {0xA95664D2, 0x9614, 0x4F35, {0xA7, 0x4
 static const GUID kIIDSessionManager2 = {0x77AA99A0, 0x1BD6, 0x484F, {0x8B, 0xC7, 0x2C, 0x65, 0x4C, 0x9A, 0x9B, 0x6F}};
 static const GUID kIIDSessionControl2 = {0xBFB7FF88, 0x7239, 0x4FC9, {0x8F, 0xA2, 0x07, 0xC9, 0x50, 0xBE, 0x9C, 0x6D}};
 
-// Une ligne par programme ayant une session audio, sur toutes les sorties :
-// c'est la liste du mélangeur de volume de Windows, applications en
-// arrière-plan comprises.
+// Programmes déjà listés (un seul par nom de fichier).
+static wchar_t gSeen[256][MAX_PATH];
+static int gSeenCount = 0;
+
+static bool markSeen(const wchar_t *exe) {
+  if (!exe[0] || gSeenCount >= 256) return false;
+  for (int k = 0; k < gSeenCount; k++)
+    if (_wcsicmp(gSeen[k], exe) == 0) return false;
+  lstrcpynW(gSeen[gSeenCount++], exe, MAX_PATH);
+  return true;
+}
+
+// Programmes ayant une fenêtre visible (titre non vide, pas une fenêtre outil).
+static BOOL CALLBACK listWindow(HWND hwnd, LPARAM) {
+  if (!IsWindowVisible(hwnd) || GetWindow(hwnd, GW_OWNER) || (GetWindowLongW(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW)) return TRUE;
+  wchar_t title[256];
+  if (!GetWindowTextW(hwnd, title, 256)) return TRUE;
+  DWORD pid = 0;
+  GetWindowThreadProcessId(hwnd, &pid);
+  if (!pid || pid == GetCurrentProcessId()) return TRUE;
+  wchar_t exe[MAX_PATH];
+  exeName(pid, exe, MAX_PATH);
+  for (const wchar_t *e : kIgnoredExes)
+    if (_wcsicmp(exe, e) == 0) return TRUE;
+  if (_wcsicmp(exe, L"ApplicationFrameHost.exe") == 0 || _wcsicmp(exe, L"SystemSettings.exe") == 0) return TRUE;
+  if (markSeen(exe)) {
+    fputs("window\t", stdout);
+    printUtf8(exe);
+    fputs("\t", stdout);
+    printUtf8(title);
+    fputs("\n", stdout);
+  }
+  return TRUE;
+}
+
+// Une ligne par programme : « audio\t<programme> » pour ceux qui ont une
+// session audio (mélangeur de volume de Windows, applications en arrière-plan
+// comprises), puis « window\t<programme>\t<titre> » pour ceux qui ont une
+// fenêtre ouverte.
 static int listApps() {
   CoInitializeEx(nullptr, COINIT_MULTITHREADED);
   IMMDeviceEnumerator *en = nullptr;
-  if (FAILED(CoCreateInstance(kCLSIDDeviceEnumerator, nullptr, CLSCTX_ALL, kIIDDeviceEnumerator, reinterpret_cast<void **>(&en)))) return fail("Liste des peripheriques indisponible", E_FAIL);
   IMMDeviceCollection *devices = nullptr;
-  en->EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE, &devices);
   UINT count = 0;
-  if (devices) devices->GetCount(&count);
-  wchar_t seen[64][MAX_PATH];
-  int nSeen = 0;
+  if (SUCCEEDED(CoCreateInstance(kCLSIDDeviceEnumerator, nullptr, CLSCTX_ALL, kIIDDeviceEnumerator, reinterpret_cast<void **>(&en)))) {
+    en->EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE, &devices);
+    if (devices) devices->GetCount(&count);
+  }
   for (UINT d = 0; d < count; d++) {
     IMMDevice *dev = nullptr;
     if (FAILED(devices->Item(d, &dev))) continue;
@@ -444,13 +479,10 @@ static int listApps() {
             DWORD pid = 0;
             ctl2->GetProcessId(&pid);
             wchar_t exe[MAX_PATH];
+            exe[0] = 0;
             if (pid && pid != GetCurrentProcessId()) exeName(pid, exe, MAX_PATH);
-            else exe[0] = 0;
-            bool dup = !exe[0];
-            for (int k = 0; k < nSeen && !dup; k++)
-              if (_wcsicmp(seen[k], exe) == 0) dup = true;
-            if (!dup && nSeen < 64) {
-              lstrcpynW(seen[nSeen++], exe, MAX_PATH);
+            if (markSeen(exe)) {
+              fputs("audio\t", stdout);
               printUtf8(exe);
               fputs("\n", stdout);
             }
@@ -465,7 +497,8 @@ static int listApps() {
     dev->Release();
   }
   if (devices) devices->Release();
-  en->Release();
+  if (en) en->Release();
+  EnumWindows(listWindow, 0);
   fflush(stdout);
   return 0;
 }

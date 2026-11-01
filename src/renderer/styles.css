@@ -185,6 +185,11 @@ button {
   text-align: center;
   color: var(--muted);
 }
+.program-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
 #preview-toolbar .spacer {
   flex: 1;
 }

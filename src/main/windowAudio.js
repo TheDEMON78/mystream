@@ -124,13 +124,23 @@ function watchGames(id, on, send) {
   }
 }
 
-/** Programmes qui utilisent le son (mélangeur de volume de Windows), même sans fenêtre. */
+/**
+ * Programmes ouverts : ceux qui utilisent le son (même sans fenêtre, comme
+ * Discord dans la zone de notification), puis ceux qui ont une fenêtre.
+ * [{ exe, kind: 'audio' | 'window', title }]
+ */
 function listApps() {
   if (!available()) return Promise.resolve([]);
   return new Promise((resolve) => {
     execFile(helperPath(), ['apps'], { windowsHide: true, timeout: 8000 }, (err, stdout) => {
       if (err) return resolve([]);
-      resolve([...new Set(String(stdout).split(/\r?\n/).map((l) => l.trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)));
+      const apps = String(stdout)
+        .split(/\r?\n/)
+        .map((line) => line.split('\t'))
+        .filter(([kind, exe]) => (kind === 'audio' || kind === 'window') && exe)
+        .map(([kind, exe, title]) => ({ exe, kind, title: title || '' }));
+      const order = { audio: 0, window: 1 };
+      resolve(apps.sort((a, b) => order[a.kind] - order[b.kind] || a.exe.localeCompare(b.exe, 'fr', { sensitivity: 'base' })));
     });
   });
 }

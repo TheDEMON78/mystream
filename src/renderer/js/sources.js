@@ -948,8 +948,8 @@
         const apps = await window.api.audioApps().catch(() => []);
         return [
           { type: 'info', text: "Seul le son de ce programme est capturé (Discord, navigateur, Spotify…), sans l'image. Il est capturé même réduit dans la zone de notification, sans fenêtre ouverte. S'il est fermé, MyStream attend son lancement et le retrouve s'il redémarre." },
-          { key: 'exe', type: 'text', label: 'Programme', placeholder: 'ex. Discord.exe', suggestions: apps },
-          { type: 'info', text: apps.length ? 'Suggestions : les programmes qui utilisent le son en ce moment (comme dans le mélangeur de volume de Windows).' : 'Lancez le programme pour le voir proposé, ou saisissez le nom de son fichier (ex. Discord.exe, Spotify.exe, chrome.exe).' },
+          { key: 'exe', type: 'program', label: 'Programme', apps },
+          { type: 'info', text: 'Programme absent de la liste ? Lancez-le puis rouvrez ces propriétés, ou choisissez « Autre programme… » et saisissez le nom de son fichier (ex. Discord.exe, Spotify.exe).' },
         ];
       },
     },
