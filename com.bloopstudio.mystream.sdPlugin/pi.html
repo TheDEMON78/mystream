@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <title>MyStream</title>
+    <style>
+      body { margin: 0; padding: 8px 12px; background: #2d2d2d; color: #d8d8d8; font: 9pt -apple-system, 'Segoe UI', sans-serif; }
+      .row { display: flex; align-items: center; margin: 6px 0; }
+      .row > label { flex: 0 0 96px; color: #969696; }
+      .row > input, .row > select { flex: 1; min-width: 0; height: 24px; padding: 0 6px; border: 0; border-radius: 3px; background: #3d3d3d; color: #d8d8d8; font: inherit; }
+      .row.check > label { flex: 1; color: #d8d8d8; }
+      .row.check > input { flex: 0 0 auto; height: auto; margin-right: 8px; }
+      button { height: 24px; padding: 0 12px; border: 0; border-radius: 3px; background: #4c7dff; color: #fff; font: inherit; cursor: pointer; }
+      .hint { margin: 6px 0; color: #969696; line-height: 1.4; }
+      .status { margin: 4px 0 8px; padding: 6px 8px; border-radius: 3px; background: #3d3d3d; }
+      .status.ok { color: #53fc18; }
+      .status.error { color: #ff6b6b; }
+      details { margin-top: 10px; border-top: 1px solid #3d3d3d; padding-top: 6px; }
+      summary { cursor: pointer; color: #969696; }
+      [hidden] { display: none !important; }
+    </style>
+  </head>
+  <body>
+    <div id="status" class="status">Connexion à MyStream…</div>
+
+    <div data-for="scene source">
+      <div class="row"><label for="scene">Scène</label><select id="scene"></select></div>
+    </div>
+    <div data-for="scene">
+      <div class="row check"><input type="checkbox" id="showName" /><label for="showName">Afficher le nom de la scène sur la touche</label></div>
+    </div>
+    <div data-for="source">
+      <div class="row"><label for="source">Source</label><select id="source"></select></div>
+    </div>
+    <div data-for="mute">
+      <div class="row"><label for="input">Source audio</label><select id="input"></select></div>
+    </div>
+    <div data-for="stream record">
+      <div class="row check"><input type="checkbox" id="showTime" /><label for="showTime">Afficher la durée sur la touche</label></div>
+    </div>
+    <div data-for="transition">
+      <p class="hint">En mode studio, passe la scène de l'aperçu à l'antenne avec la transition choisie dans MyStream.</p>
+    </div>
+
+    <details id="connection">
+      <summary>Connexion à MyStream</summary>
+      <p class="hint">Valeurs de MyStream, dans Paramètres &gt; Stream Deck. Communes à toutes les touches.</p>
+      <div class="row"><label for="host">Adresse</label><input id="host" type="text" placeholder="127.0.0.1" /></div>
+      <div class="row"><label for="port">Port</label><input id="port" type="number" min="1" max="65535" placeholder="4455" /></div>
+      <div class="row"><label for="password">Mot de passe</label><input id="password" type="password" /></div>
+      <div class="row"><label></label><button id="save">Se connecter</button></div>
+    </details>
+
+    <script src="pi.js"></script>
+  </body>
+</html>

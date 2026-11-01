@@ -1,0 +1,83 @@
+{
+  "Name": "MyStream",
+  "Version": "1.0.0.0",
+  "Author": "BloopStudio",
+  "Description": "Pilotez MyStream depuis le Stream Deck : scènes, micro et sources audio, sources affichées ou masquées, streaming, enregistrement et transition du mode studio.",
+  "Category": "MyStream",
+  "CategoryIcon": "imgs/category",
+  "Icon": "imgs/plugin",
+  "URL": "https://github.com/TheDEMON78/mystream",
+  "CodePath": "plugin.html",
+  "PropertyInspectorPath": "pi.html",
+  "SDKVersion": 2,
+  "UUID": "com.bloopstudio.mystream",
+  "Software": { "MinimumVersion": "6.0" },
+  "OS": [
+    { "Platform": "windows", "MinimumVersion": "10" },
+    { "Platform": "mac", "MinimumVersion": "10.15" }
+  ],
+  "Actions": [
+    {
+      "UUID": "com.bloopstudio.mystream.scene",
+      "Name": "Scène",
+      "Tooltip": "Passe cette scène à l'antenne. La touche s'allume quand la scène est à l'antenne.",
+      "Icon": "imgs/actions/scene",
+      "DisableAutomaticStates": true,
+      "States": [
+        { "Image": "imgs/actions/scene", "TitleAlignment": "bottom" },
+        { "Image": "imgs/actions/scene-on", "TitleAlignment": "bottom" }
+      ]
+    },
+    {
+      "UUID": "com.bloopstudio.mystream.mute",
+      "Name": "Couper le son",
+      "Tooltip": "Coupe ou rétablit le micro, ou une autre source audio. La touche passe au rouge quand le son est coupé.",
+      "Icon": "imgs/actions/mute",
+      "DisableAutomaticStates": true,
+      "States": [
+        { "Image": "imgs/actions/mute", "TitleAlignment": "bottom" },
+        { "Image": "imgs/actions/mute-on", "TitleAlignment": "bottom" }
+      ]
+    },
+    {
+      "UUID": "com.bloopstudio.mystream.source",
+      "Name": "Afficher / masquer une source",
+      "Tooltip": "Affiche ou masque une source dans une scène.",
+      "Icon": "imgs/actions/source",
+      "DisableAutomaticStates": true,
+      "States": [
+        { "Image": "imgs/actions/source-off", "TitleAlignment": "bottom" },
+        { "Image": "imgs/actions/source", "TitleAlignment": "bottom" }
+      ]
+    },
+    {
+      "UUID": "com.bloopstudio.mystream.stream",
+      "Name": "Streaming",
+      "Tooltip": "Démarre ou arrête le live. La touche s'allume pendant le live et affiche sa durée.",
+      "Icon": "imgs/actions/stream",
+      "DisableAutomaticStates": true,
+      "States": [
+        { "Image": "imgs/actions/stream", "TitleAlignment": "bottom" },
+        { "Image": "imgs/actions/stream-on", "TitleAlignment": "bottom" }
+      ]
+    },
+    {
+      "UUID": "com.bloopstudio.mystream.record",
+      "Name": "Enregistrement",
+      "Tooltip": "Démarre ou arrête l'enregistrement. La touche s'allume pendant l'enregistrement et affiche sa durée.",
+      "Icon": "imgs/actions/record",
+      "DisableAutomaticStates": true,
+      "States": [
+        { "Image": "imgs/actions/record", "TitleAlignment": "bottom" },
+        { "Image": "imgs/actions/record-on", "TitleAlignment": "bottom" }
+      ]
+    },
+    {
+      "UUID": "com.bloopstudio.mystream.transition",
+      "Name": "Transition (mode studio)",
+      "Tooltip": "En mode studio, passe la scène de l'aperçu à l'antenne.",
+      "Icon": "imgs/actions/transition",
+      "States": [{ "Image": "imgs/actions/transition", "TitleAlignment": "bottom" }]
+    }
+  ]
+}
