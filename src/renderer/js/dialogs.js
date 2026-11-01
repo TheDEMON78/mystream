@@ -530,14 +530,14 @@
       remote: {
         label: 'Stream Deck',
         fields: [
-          { type: 'info', text: 'MyStream se pilote comme OBS : Stream Deck (plugin OBS Studio), Streamer.bot, Touch Portal, Bitfocus Companion… Changement de scène, micro coupé, volume, sources affichées ou masquées, démarrage du live et de l’enregistrement.' },
+          { type: 'info', text: 'MyStream se pilote comme OBS : Stream Deck (plugin gratuit « OBS Tools » de BarRaider), Streamer.bot, Touch Portal, Bitfocus Companion… Changement de scène, micro coupé, volume, sources affichées ou masquées, démarrage du live et de l’enregistrement.' },
           { key: 'enabled', type: 'checkbox', label: 'Activer la télécommande (protocole obs-websocket v5)' },
           { key: 'port', type: 'number', label: 'Port', min: 1024, max: 65535, showIf: (v) => v.enabled },
           { key: 'password', type: 'password', label: 'Mot de passe', showIf: (v) => v.enabled },
           { key: 'lan', type: 'checkbox', label: 'Accepter les connexions des autres appareils du réseau local (téléphone, autre PC)', showIf: (v) => v.enabled },
           {
             type: 'info',
-            text: 'Dans le plugin OBS du Stream Deck : adresse 127.0.0.1, le port et le mot de passe ci-dessus. Si OBS est ouvert en même temps sur le même port, changez le port ici et dans le plugin.',
+            text: 'Stream Deck : installez « OBS Tools » (BarRaider) depuis le Marketplace. Le plugin « OBS Studio » d’Elgato ne fonctionne pas avec MyStream. Dans les réglages d’une action OBS Tools : adresse 127.0.0.1, le port et le mot de passe ci-dessus. Si OBS est ouvert en même temps sur le même port, changez le port ici et dans le plugin.',
             showIf: (v) => v.enabled,
           },
           {

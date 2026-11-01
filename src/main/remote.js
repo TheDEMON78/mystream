@@ -1,6 +1,6 @@
 'use strict';
 
-// Télécommande compatible obs-websocket v5 : le Stream Deck (plugin OBS),
+// Télécommande compatible obs-websocket v5 : le Stream Deck (plugin OBS Tools),
 // Streamer.bot, Touch Portal, Bitfocus Companion… pilotent MyStream comme OBS.
 // Le serveur tourne ici ; chaque requête est traitée par l'interface
 // (src/renderer/js/remote.js), qui connaît les scènes et les sources.
