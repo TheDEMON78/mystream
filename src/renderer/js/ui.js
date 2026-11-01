@@ -637,6 +637,7 @@
           { label: 'Assistant de configuration…', action: () => MS.openWizard() },
           { label: 'Rechercher des mises à jour', action: () => this.checkUpdates() },
           { label: 'Ouvrir le dossier des journaux', action: () => window.api.openLogs() },
+          { label: 'Plugin Stream Deck MyStream…', action: () => window.api.openExternal('https://github.com/TheDEMON78/mystream/tree/streamdeck-plugin') },
           { label: 'Copier le diagnostic de performance', action: () => this.copyPerfDiagnostic() },
           { label: "Copier le diagnostic d'affichage", action: () => this.copyLayoutDiagnostic() },
           { separator: true },

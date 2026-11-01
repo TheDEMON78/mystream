@@ -80,7 +80,7 @@ Autres ajouts : raccourcis clavier globaux (fonctionnent même en jeu), transfor
 
 ## Stream Deck et télécommandes
 
-MyStream parle le même protocole qu'OBS (**obs-websocket v5**, JSON et MessagePack) : le Stream Deck (plugin gratuit **OBS Tools** de BarRaider, dans le Marketplace Stream Deck ; le plugin « OBS Studio » d'Elgato, lui, passe par une extension installée dans OBS et ne fonctionne pas avec MyStream), Streamer.bot, Touch Portal ou Bitfocus Companion le pilotent comme OBS.
+MyStream parle le même protocole qu'OBS (**obs-websocket v5**, JSON et MessagePack) : le Stream Deck (notre plugin **MyStream**, branche [`streamdeck-plugin`](https://github.com/TheDEMON78/mystream/tree/streamdeck-plugin), ou le plugin gratuit **OBS Tools** de BarRaider, dans le Marketplace Stream Deck ; le plugin « OBS Studio » d'Elgato, lui, passe par une extension installée dans OBS et ne fonctionne pas avec MyStream), Streamer.bot, Touch Portal ou Bitfocus Companion le pilotent comme OBS.
 
 1. Dans MyStream : **Paramètres > Stream Deck**, notez le port (4455) et le mot de passe (créé au premier lancement).
 2. Dans une action d'OBS Tools (ex. *Scene Switcher* ou *Source Mute*), réglez la connexion : adresse `127.0.0.1`, ce port et ce mot de passe. Si OBS est ouvert en même temps, changez le port des deux côtés.

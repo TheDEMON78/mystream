@@ -537,7 +537,7 @@
           { key: 'lan', type: 'checkbox', label: 'Accepter les connexions des autres appareils du réseau local (téléphone, autre PC)', showIf: (v) => v.enabled },
           {
             type: 'info',
-            text: 'Stream Deck : installez « OBS Tools » (BarRaider) depuis le Marketplace. Le plugin « OBS Studio » d’Elgato ne fonctionne pas avec MyStream. Dans les réglages d’une action OBS Tools : adresse 127.0.0.1, le port et le mot de passe ci-dessus. Si OBS est ouvert en même temps sur le même port, changez le port ici et dans le plugin.',
+            text: 'Stream Deck : installez le plugin MyStream (Aide > Plugin Stream Deck MyStream), ou « OBS Tools » (BarRaider) depuis le Marketplace. Le plugin « OBS Studio » d’Elgato ne fonctionne pas avec MyStream. Dans les réglages d’une action OBS Tools : adresse 127.0.0.1, le port et le mot de passe ci-dessus. Si OBS est ouvert en même temps sur le même port, changez le port ici et dans le plugin.',
             showIf: (v) => v.enabled,
           },
           {
