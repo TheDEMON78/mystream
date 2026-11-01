@@ -36,7 +36,7 @@
       MS.on('chat:cleared', () => this.renderChat());
       MS.on('chat:status', () => this.renderChatStatus());
       MS.on('settings:changed', () => this.renderChatStatus());
-      for (const evt of ['items:changed', 'sources:changed', 'selection:changed', 'runtime:error', 'runtime:ready']) MS.on(evt, () => this.renderSources());
+      for (const evt of ['items:changed', 'sources:changed', 'selection:changed', 'runtime:error', 'runtime:ready', 'runtime:status']) MS.on(evt, () => this.renderSources());
       for (const evt of ['mixer:changed', 'items:changed', 'sources:changed']) MS.on(evt, () => this.renderMixer());
       MS.on('outputs:changed', () => this.renderControls());
 

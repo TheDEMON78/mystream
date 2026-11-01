@@ -214,7 +214,7 @@
       case 'wasapi_process_output_capture': {
         const w = parseWindow(s.window);
         notes.push({ level: 'info', text: `« ${obs.name} » : son de l'application « ${w.exe || w.title} » (Capture audio d'application), retrouvée même si son titre change.` });
-        return mk('app_audio', { captureKind: 'window', captureName: w.title, windowMatch: { title: w.title, exe: w.exe } });
+        return mk('app_audio', { exe: w.exe || '', captureKind: 'window', captureName: w.title, windowMatch: { title: w.title, exe: w.exe } });
       }
       case 'image_source':
         return mk('image', { file: s.file || '' });

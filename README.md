@@ -13,7 +13,7 @@ Composez vos scènes à partir de plusieurs sources (écran, webcam, images, vid
   - Capture d'écran / de fenêtre (sélecteur avec miniatures), **avec le son de la fenêtre capturée** sous Windows 10 (2004) ou plus récent : seul le son de l'application est pris, pas celui de Discord ou de la musique à côté. Pour un écran, c'est le son de tout le PC sauf MyStream (pas d'écho du retour casque).
   - Périphérique de capture vidéo (webcam, carte d'acquisition) avec choix de résolution et de FPS
   - Capture d'entrée audio (micro) et audio du bureau (Windows)
-  - **Capture audio d'application** (Windows) : le son d'un seul programme (Discord, navigateur, Spotify…), sans l'image, retrouvé même si son titre change ou s'il est relancé
+  - **Capture audio d'application** (Windows) : le son d'un seul programme (Discord, navigateur, Spotify…), sans l'image. Le programme est désigné par son nom (ex. `Discord.exe`) : il est capturé même réduit dans la zone de notification, sans fenêtre ouverte, et retrouvé s'il redémarre
   - Image (dont **GIF animés**), source média (vidéo/audio, lecture en boucle)
   - Texte (police, taille, couleur, contour, fond, alignement) et source de couleur
   - **Chat du stream** incrusté à l'écran (logos Twitch/Kick, badges en images, emotes, disparition automatique des anciens messages)
@@ -77,6 +77,17 @@ Un rapport liste ensuite ce qui a été adapté et ce qu'il reste à vérifier (
 
 Autres ajouts : raccourcis clavier globaux (fonctionnent même en jeu), transformation au pixel près (Ctrl+E), dupliquer une scène, réduction dans la zone de notification, journal d'événements (*Aide > Ouvrir le dossier des journaux*).
 - Configuration (scènes, sources, réglages) sauvegardée automatiquement.
+
+## Stream Deck et télécommandes
+
+MyStream parle le même protocole qu'OBS (**obs-websocket v5**, JSON et MessagePack) : le Stream Deck (plugin OBS Studio), Streamer.bot, Touch Portal ou Bitfocus Companion le pilotent comme OBS.
+
+1. Dans MyStream : **Paramètres > Stream Deck**, notez le port (4455) et le mot de passe (créé au premier lancement).
+2. Dans le plugin : adresse `127.0.0.1`, ce port et ce mot de passe. Si OBS est ouvert en même temps, changez le port des deux côtés.
+
+Pris en charge : changer de scène (programme et aperçu en mode studio), couper ou rétablir une source audio, régler son volume, afficher ou masquer une source dans une scène, démarrer ou arrêter le streaming et l'enregistrement, état du live, avec les événements qui tiennent les touches à jour. Les autres appareils du réseau local (téléphone, autre PC) peuvent se connecter si l'option est cochée.
+
+Sans configuration, les **raccourcis clavier globaux** (Paramètres > Général) fonctionnent aussi avec l'action « Raccourci clavier » du Stream Deck.
 
 ## Téléchargement
 

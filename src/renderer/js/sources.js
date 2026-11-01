@@ -322,6 +322,11 @@
     async start() {
       if (!MS.appInfo.windowAudio) return this.fail(new Error('Nécessite Windows 10 version 2004 ou plus récent'));
       const s = this.src.settings;
+      // Programme connu : capturé par son nom, avec ou sans fenêtre ; le module natif attend son lancement.
+      if (s.exe && s.exe.trim()) {
+        s.captureId = `exe:${s.exe.trim()}`;
+        return this.markReady();
+      }
       try {
         const list = await window.api.getCaptureSources(false);
         const target = MS.findCaptureTarget(list, { ...s, captureKind: 'window' });
@@ -334,6 +339,19 @@
         clearTimeout(this.retry);
         this.retry = setTimeout(() => !this.disposed && MS.runtimes.refresh(this.src), RETRY_WINDOW);
       }
+    }
+    onAudioState({ state, value }) {
+      const s = this.src.settings;
+      if (state === 'exe' && value && !s.exe) {
+        // Ancienne source liée à une fenêtre : on retient le programme pour le retrouver même sans fenêtre.
+        s.exe = value;
+        MS.store.save();
+        return MS.runtimes.refresh(this.src);
+      }
+      if (state === 'waiting') this.status = `${s.exe} n'est pas lancé : capture dès son ouverture`;
+      else if (state === 'capturing') this.status = '';
+      else return;
+      MS.emit('runtime:status', this);
     }
     hasAudio() {
       return this.ready;
@@ -806,6 +824,10 @@
     const rt = MS.runtimes.get(id);
     if (rt && rt.pushAudio) rt.pushAudio(data);
   });
+  window.api.onWinAudioState((st) => {
+    const rt = MS.runtimes.get(st.id);
+    if (rt && rt.onAudioState) rt.onAudioState(st);
+  });
   window.api.onWinAudioError(({ id, error }) => {
     const rt = MS.runtimes.get(id);
     if (!rt || (rt.onAudioError && rt.onAudioError(error))) return;
@@ -920,12 +942,16 @@
       label: "Capture audio d'application",
       glyph: '🎧',
       audioOnly: true,
-      defaults: () => ({ captureId: '', captureName: '', captureKind: 'window' }),
+      defaults: () => ({ exe: '', captureId: '', captureName: '', captureKind: 'window' }),
       create: (src) => new AppAudioRuntime(src),
-      fields: () => [
-        { type: 'info', text: "Seul le son de cette application est capturé (Discord, navigateur, Spotify…), sans l'image. Si elle est fermée, MyStream la retrouve dès qu'elle redémarre." },
-        { key: 'capture', type: 'capture', label: 'Application', kinds: ['window'] },
-      ],
+      fields: async () => {
+        const apps = await window.api.audioApps().catch(() => []);
+        return [
+          { type: 'info', text: "Seul le son de ce programme est capturé (Discord, navigateur, Spotify…), sans l'image. Il est capturé même réduit dans la zone de notification, sans fenêtre ouverte. S'il est fermé, MyStream attend son lancement et le retrouve s'il redémarre." },
+          { key: 'exe', type: 'text', label: 'Programme', placeholder: 'ex. Discord.exe', suggestions: apps },
+          { type: 'info', text: apps.length ? 'Suggestions : les programmes qui utilisent le son en ce moment (comme dans le mélangeur de volume de Windows).' : 'Lancez le programme pour le voir proposé, ou saisissez le nom de son fichier (ex. Discord.exe, Spotify.exe, chrome.exe).' },
+        ];
+      },
     },
     image: {
       label: 'Image',

@@ -33,7 +33,7 @@ function start(id, captureId, send) {
     return;
   }
   const m = /^window:(\d+):/.exec(String(captureId || ''));
-  const target = m ? `hwnd:${m[1]}` : `exclude:${process.pid}`;
+  const target = /^exe:/.test(captureId) ? captureId : m ? `hwnd:${m[1]}` : `exclude:${process.pid}`;
   const proc = spawn(helperPath(), [target], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
   const cap = { proc, rest: null, stderr: '' };
   captures.set(id, cap);
@@ -45,11 +45,22 @@ function start(id, captureId, send) {
     cap.rest = usable < buf.length ? Buffer.from(buf.subarray(usable)) : null;
     if (usable) send('winaudio:data', { id, data: new Uint8Array(buf.buffer, buf.byteOffset, usable).slice() });
   });
-  proc.stderr.on('data', (d) => (cap.stderr = (cap.stderr + d).slice(-500)));
+  // Lignes « state … » : état de la capture (programme attendu, capturé, nom du programme).
+  let pending = '';
+  proc.stderr.setEncoding('utf8');
+  proc.stderr.on('data', (d) => {
+    const lines = (pending + d).split(/\r?\n/);
+    pending = lines.pop();
+    for (const line of lines) {
+      const st = /^state (\w+) ?(.*)$/.exec(line);
+      if (st) send('winaudio:state', { id, state: st[1], value: st[2] });
+      else if (line.trim() && line.trim() !== 'ok') cap.stderr = `${cap.stderr}${line}\n`.slice(-500);
+    }
+  });
   proc.on('close', (code) => {
     if (captures.get(id) !== cap) return;
     captures.delete(id);
-    const error = cap.stderr.replace(/^ok\s*/m, '').trim() || `arrêt inattendu (code ${code})`;
+    const error = cap.stderr.trim() || `arrêt inattendu (code ${code})`;
     logger.warn(`Son de fenêtre arrêté (${target}) :`, error);
     send('winaudio:error', { id, error });
   });
@@ -113,6 +124,17 @@ function watchGames(id, on, send) {
   }
 }
 
+/** Programmes qui utilisent le son (mélangeur de volume de Windows), même sans fenêtre. */
+function listApps() {
+  if (!available()) return Promise.resolve([]);
+  return new Promise((resolve) => {
+    execFile(helperPath(), ['apps'], { windowsHide: true, timeout: 8000 }, (err, stdout) => {
+      if (err) return resolve([]);
+      resolve([...new Set(String(stdout).split(/\r?\n/).map((l) => l.trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)));
+    });
+  });
+}
+
 /* Priorité face au jeu --------------------------------------------------- */
 
 let priority = null;
@@ -156,4 +178,4 @@ function stopAll() {
   watchGames(null, false, gameWatch.send);
 }
 
-module.exports = { start, stop, stopAll, available, watchGames, currentGame: () => gameWatch.current, raisePriority, gpuPriority, priority: () => priority };
+module.exports = { start, stop, stopAll, available, listApps, watchGames, currentGame: () => gameWatch.current, raisePriority, gpuPriority, priority: () => priority };

@@ -230,9 +230,13 @@
           Object.assign(getters, picker.getters);
           break;
         }
-        default:
-          input = el('input', { class: 'input', type: 'text', value: v ?? '', placeholder: f.placeholder || '', oninput: changed });
-          getters[f.key] = () => input.value;
+        default: {
+          // Suggestions éventuelles (liste déroulante qui laisse saisir autre chose).
+          const list = f.suggestions && f.suggestions.length ? el('datalist', { id: `dl-${f.key}-${MS.uid()}` }, f.suggestions.map((o) => el('option', { value: o }))) : null;
+          const text = el('input', { class: 'input', type: 'text', value: v ?? '', placeholder: f.placeholder || '', list: list ? list.id : null, oninput: changed });
+          input = list ? el('div', {}, text, list) : text;
+          getters[f.key] = () => text.value;
+        }
       }
       root.append(el('label', { class: `field ${f.type === 'capture' ? 'wide' : ''}` }, el('span', { text: f.label }), input));
     }
@@ -523,6 +527,32 @@
         ],
         values: { ...st.audio },
       },
+      remote: {
+        label: 'Stream Deck',
+        fields: [
+          { type: 'info', text: 'MyStream se pilote comme OBS : Stream Deck (plugin OBS Studio), Streamer.bot, Touch Portal, Bitfocus Companion… Changement de scène, micro coupé, volume, sources affichées ou masquées, démarrage du live et de l’enregistrement.' },
+          { key: 'enabled', type: 'checkbox', label: 'Activer la télécommande (protocole obs-websocket v5)' },
+          { key: 'port', type: 'number', label: 'Port', min: 1024, max: 65535, showIf: (v) => v.enabled },
+          { key: 'password', type: 'password', label: 'Mot de passe', showIf: (v) => v.enabled },
+          { key: 'lan', type: 'checkbox', label: 'Accepter les connexions des autres appareils du réseau local (téléphone, autre PC)', showIf: (v) => v.enabled },
+          {
+            type: 'info',
+            text: 'Dans le plugin OBS du Stream Deck : adresse 127.0.0.1, le port et le mot de passe ci-dessus. Si OBS est ouvert en même temps sur le même port, changez le port ici et dans le plugin.',
+            showIf: (v) => v.enabled,
+          },
+          {
+            type: 'button',
+            label: 'État de la connexion',
+            showIf: (v) => v.enabled,
+            onClick: async () => {
+              const r = await window.api.remoteInfo();
+              const lan = st.remote.lan && r.addresses.length ? ` Adresse sur le réseau local : ${r.addresses.join(', ')}.` : '';
+              MS.toast(MS.remote.error ? `Télécommande indisponible : ${MS.remote.error}` : `${r.clients} appareil${r.clients > 1 ? 's' : ''} connecté${r.clients > 1 ? 's' : ''}.${lan}`, MS.remote.error ? 'error' : 'info', 8000);
+            },
+          },
+        ],
+        values: { ...st.remote },
+      },
       general: {
         label: 'Général',
         fields: [
@@ -585,6 +615,7 @@
         output: d.output,
         restream: d.restream,
         chat: d.chat,
+        remote: { ...d.remote, password: st.remote.password },
         audio: d.audio,
         video: { resolution: `${d.video.width}x${d.video.height}`, fps: d.video.fps },
         general: {
@@ -615,6 +646,8 @@
     Object.assign(st.output, forms.output.values(), { audioBitrate: Number(forms.output.values().audioBitrate) });
     Object.assign(st.restream, forms.restream.values());
     Object.assign(st.chat, forms.chat.values());
+    const rv = forms.remote.values();
+    Object.assign(st.remote, { ...rv, port: MS.clamp(Math.round(Number(rv.port) || 4455), 1024, 65535) });
     const g = forms.general.values();
     st.ui.confirmStopStream = g.confirmStopStream;
     st.ui.minimizeToTray = g.minimizeToTray;

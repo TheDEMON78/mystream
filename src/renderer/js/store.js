@@ -26,6 +26,8 @@
         liveInfo: { titles: [] },
         restream: { url: 'http://localhost:3050', password: '', allowSelfSigned: true, rtmpUrl: '' },
         chat: { mode: 'off', twitchChannel: '', kickChannel: '', kickChatroomId: '' },
+        // Télécommande compatible obs-websocket (Stream Deck…) ; mot de passe créé au premier lancement.
+        remote: { enabled: true, port: 4455, password: null, lan: false },
         ui: {
           studio: false,
           docks: { scenes: true, sources: true, mixer: true, transitions: true, controls: true, chat: true, liveinfo: true },
@@ -71,6 +73,10 @@
       const d = defaults();
       this.data = saved ? { ...d, ...saved, settings: deepMerge(d.settings, saved.settings) } : d;
       this.fresh = !saved; // premier lancement : l'assistant de configuration s'ouvrira
+      if (this.data.settings.remote.password == null) {
+        this.data.settings.remote.password = MS.remote.newPassword();
+        this.save();
+      }
       if (!this.data.scenes.length) this.addScene('Scène', true);
       if (!this.scene(this.data.currentSceneId)) this.data.currentSceneId = this.data.scenes[0].id;
       if (!this.scene(this.data.previewSceneId)) this.data.previewSceneId = this.data.currentSceneId;

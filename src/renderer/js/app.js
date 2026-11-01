@@ -19,6 +19,7 @@
   MS.runtimes.sync();
   MS.ui.init();
   MS.live.init();
+  MS.remote.init();
   MS.compositor.preloadStingers();
   MS.history.init();
   window.api.onHotkey((action) => MS.hotkeys.run(action));

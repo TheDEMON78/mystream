@@ -12,6 +12,7 @@ const updater = require('./updater');
 const logger = require('./logger');
 const windowAudio = require('./windowAudio');
 const kickChat = require('./kickChat');
+const remote = require('./remote');
 
 // Les sources média doivent pouvoir jouer du son sans interaction préalable.
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
@@ -474,6 +475,40 @@ ipcMain.on('browser:ack', (_e, id) => browserSources.ack(id));
 kickChat.init(ipcMain, send);
 ipcMain.on('winaudio:start', (_e, id, captureId) => windowAudio.start(id, captureId, send));
 ipcMain.on('winaudio:stop', (_e, id) => windowAudio.stop(id));
+ipcMain.handle('winaudio:apps', () => windowAudio.listApps());
+
+/* Télécommande (Stream Deck…) : les requêtes sont traitées par l'interface. */
+const remoteCalls = new Map();
+let remoteSeq = 0;
+function remoteInvoke(type, data) {
+  return new Promise((resolve) => {
+    if (!win || win.isDestroyed()) return resolve({ code: 702, comment: 'MyStream est en cours de démarrage.' });
+    const rid = ++remoteSeq;
+    const timer = setTimeout(() => {
+      remoteCalls.delete(rid);
+      resolve({ code: 702, comment: 'MyStream ne répond pas.' });
+    }, 5000);
+    remoteCalls.set(rid, (r) => {
+      clearTimeout(timer);
+      resolve(r);
+    });
+    send('remote:request', { rid, type, data });
+  });
+}
+ipcMain.on('remote:response', (_e, rid, r) => {
+  const done = remoteCalls.get(rid);
+  remoteCalls.delete(rid);
+  if (done) done(r);
+});
+ipcMain.on('remote:event', (_e, ev) => remote.broadcast(ev));
+ipcMain.handle('remote:configure', (_e, cfg) => remote.configure(cfg, remoteInvoke));
+ipcMain.handle('remote:info', () => ({
+  clients: remote.clients(),
+  addresses: Object.values(os.networkInterfaces())
+    .flat()
+    .filter((a) => a && a.family === 'IPv4' && !a.internal)
+    .map((a) => a.address),
+}));
 ipcMain.on('game:watch', (_e, id, on) => windowAudio.watchGames(id, on, send));
 ipcMain.handle('game:current', () => windowAudio.currentGame());
 
@@ -619,7 +654,10 @@ if (!app.requestSingleInstanceLock()) {
     });
   });
 
-  app.on('will-quit', () => globalShortcut.unregisterAll());
+  app.on('will-quit', () => {
+    globalShortcut.unregisterAll();
+    remote.stop();
+  });
 
   app.on('window-all-closed', async () => {
     await Promise.all([...outputs.keys()].map(stopOutput));

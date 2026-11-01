@@ -7,6 +7,10 @@
 //   window-audio.exe hwnd:<handle>   son de l'application qui possède la fenêtre
 //   window-audio.exe pid:<pid>       son d'un processus
 //   window-audio.exe exclude:<pid>   son de tout le système SAUF ce processus
+//   window-audio.exe exe:<nom.exe>   son d'un programme, même sans fenêtre (Discord dans la
+//                                    zone de notification) ; attend son lancement et le
+//                                    retrouve s'il redémarre
+//   window-audio.exe apps            liste des programmes qui utilisent le son
 //   window-audio.exe games:<pid>     surveille le jeu au premier plan (voir watchGames)
 //   window-audio.exe prio:<pid>,…    priorité processeur et GPU de MyStream (voir raisePriority)
 //
@@ -16,6 +20,8 @@
 #include <windows.h>
 #include <mmdeviceapi.h>
 #include <audioclient.h>
+#include <audiopolicy.h>
+#include <tlhelp32.h>
 #include <fcntl.h>
 #include <io.h>
 #include <stdio.h>
@@ -256,28 +262,13 @@ static int raisePriority(const wchar_t *list) {
   return 0;
 }
 
-int wmain(int argc, wchar_t **argv) {
-  if (argc < 2) {
-    fprintf(stderr, "Usage : window-audio.exe hwnd:<handle> | pid:<pid> | exclude:<pid> | games:<pid> | prio:<pid>,...\n");
-    return 2;
-  }
-  const wchar_t *arg = argv[1];
-  if (wcsncmp(arg, L"games:", 6) == 0) return watchGames(wcstoul(arg + 6, nullptr, 10));
-  if (wcsncmp(arg, L"prio:", 5) == 0) return raisePriority(arg + 5);
-  DWORD pid = 0;
-  MS_LOOPBACK_MODE mode = MS_LOOPBACK_INCLUDE_TREE;
-  if (wcsncmp(arg, L"hwnd:", 5) == 0) {
-    HWND hwnd = reinterpret_cast<HWND>(static_cast<uintptr_t>(_wcstoui64(arg + 5, nullptr, 10)));
-    GetWindowThreadProcessId(hwnd, &pid);
-  } else if (wcsncmp(arg, L"pid:", 4) == 0) {
-    pid = wcstoul(arg + 4, nullptr, 10);
-  } else if (wcsncmp(arg, L"exclude:", 8) == 0) {
-    pid = wcstoul(arg + 8, nullptr, 10);
-    mode = MS_LOOPBACK_EXCLUDE_TREE;
-  }
-  if (!pid) return fail("Fenetre ou processus introuvable", E_INVALIDARG);
+// --- Capture du son d'un processus -------------------------------------------
 
-  CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+// Capture le son de `pid` (et de ses processus enfants) vers stdout.
+// Renvoie 0 quand MyStream ferme le tube, -1 quand `proc` (facultatif) se
+// termine, ou un code d'erreur (> 0) avec un message sur stderr.
+static int capture(DWORD pid, MS_LOOPBACK_MODE mode, HANDLE proc) {
+  static bool announced = false;
   HMODULE mmdev = LoadLibraryW(L"Mmdevapi.dll");
   ActivateFn activate = mmdev ? reinterpret_cast<ActivateFn>(GetProcAddress(mmdev, "ActivateAudioInterfaceAsync")) : nullptr;
   if (!activate) return fail("ActivateAudioInterfaceAsync indisponible", E_NOTIMPL);
@@ -298,6 +289,8 @@ int wmain(int argc, wchar_t **argv) {
   WaitForSingleObject(handler->done, 10000);
   if (FAILED(handler->result) || !handler->client) return fail("Capture du processus refusee", handler->result);
   IAudioClient *client = handler->client;
+  if (op) op->Release();
+  handler->Release();
 
   WAVEFORMATEX fmt = {};
   fmt.wFormatTag = WAVE_FORMAT_IEEE_FLOAT;
@@ -313,32 +306,209 @@ int wmain(int argc, wchar_t **argv) {
 
   HANDLE ready = CreateEventW(nullptr, FALSE, FALSE, nullptr);
   client->SetEventHandle(ready);
-  IAudioCaptureClient *capture = nullptr;
-  hr = client->GetService(kIIDAudioCaptureClient, reinterpret_cast<void **>(&capture));
+  IAudioCaptureClient *cap = nullptr;
+  hr = client->GetService(kIIDAudioCaptureClient, reinterpret_cast<void **>(&cap));
   if (FAILED(hr)) return fail("Service de capture indisponible", hr);
   hr = client->Start();
   if (FAILED(hr)) return fail("Demarrage de la capture impossible", hr);
 
-  _setmode(_fileno(stdout), _O_BINARY);
-  CreateThread(nullptr, 0, watchStdin, nullptr, 0, nullptr);
-  fprintf(stderr, "ok\n");
+  if (!announced) {
+    announced = true;
+    fprintf(stderr, "ok\n");
+  }
+  fprintf(stderr, "state capturing %lu\n", static_cast<unsigned long>(pid));
   fflush(stderr);
 
   static float silence[48000 * 2];
+  int result = 0;
   for (;;) {
     WaitForSingleObject(ready, 100);
+    if (proc && WaitForSingleObject(proc, 0) == WAIT_OBJECT_0) {
+      result = -1;
+      break;
+    }
     UINT32 packet = 0;
-    while (SUCCEEDED(capture->GetNextPacketSize(&packet)) && packet > 0) {
+    bool closed = false;
+    while (SUCCEEDED(cap->GetNextPacketSize(&packet)) && packet > 0) {
       BYTE *data = nullptr;
       UINT32 frames = 0;
       DWORD flags = 0;
-      if (FAILED(capture->GetBuffer(&data, &frames, &flags, nullptr, nullptr))) break;
+      if (FAILED(cap->GetBuffer(&data, &frames, &flags, nullptr, nullptr))) break;
       const size_t bytes = static_cast<size_t>(frames) * fmt.nBlockAlign;
       const void *src = (flags & AUDCLNT_BUFFERFLAGS_SILENT) && bytes <= sizeof(silence) ? static_cast<const void *>(silence) : data;
       const size_t written = fwrite(src, 1, bytes, stdout);
-      capture->ReleaseBuffer(frames);
-      if (written != bytes) return 0;  // MyStream a fermé le tube
+      cap->ReleaseBuffer(frames);
+      if (written != bytes) {
+        closed = true;  // MyStream a fermé le tube
+        break;
+      }
     }
+    if (closed) break;
     fflush(stdout);
   }
+  client->Stop();
+  cap->Release();
+  client->Release();
+  CloseHandle(ready);
+  return result;
+}
+
+// --- Programme désigné par son nom (exe:) -------------------------------------
+
+// Processus « racine » du programme : celui dont le parent n'est pas le même
+// programme. Discord, les navigateurs… lancent plusieurs processus et jouent
+// le son depuis un enfant : capturer la racine avec ses enfants prend tout.
+static DWORD findRootProcess(const wchar_t *exe) {
+  HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+  if (snap == INVALID_HANDLE_VALUE) return 0;
+  PROCESSENTRY32W e = {};
+  e.dwSize = sizeof(e);
+  DWORD pids[512];
+  DWORD parents[512];
+  int n = 0;
+  for (BOOL ok = Process32FirstW(snap, &e); ok && n < 512; ok = Process32NextW(snap, &e)) {
+    if (_wcsicmp(e.szExeFile, exe) == 0) {
+      pids[n] = e.th32ProcessID;
+      parents[n] = e.th32ParentProcessID;
+      n++;
+    }
+  }
+  CloseHandle(snap);
+  for (int i = 0; i < n; i++) {
+    bool childOfSame = false;
+    for (int j = 0; j < n; j++)
+      if (parents[i] == pids[j]) childOfSame = true;
+    if (!childOfSame) return pids[i];
+  }
+  return n ? pids[0] : 0;
+}
+
+// Attend que le programme tourne, capture son son, et recommence s'il se ferme.
+static int captureExe(const wchar_t *exe) {
+  fprintf(stderr, "ok\n");
+  bool waiting = false;
+  for (;;) {
+    DWORD pid = findRootProcess(exe);
+    HANDLE proc = pid ? OpenProcess(SYNCHRONIZE, FALSE, pid) : nullptr;
+    if (!proc) {
+      if (!waiting) {
+        fprintf(stderr, "state waiting\n");
+        fflush(stderr);
+        waiting = true;
+      }
+      Sleep(2000);
+      continue;
+    }
+    waiting = false;
+    int r = capture(pid, MS_LOOPBACK_INCLUDE_TREE, proc);
+    CloseHandle(proc);
+    if (r >= 0) return r;
+    Sleep(1000);  // le programme vient de se fermer (ou redémarre)
+  }
+}
+
+// --- Programmes qui utilisent le son (apps) ----------------------------------
+
+static const GUID kCLSIDDeviceEnumerator = {0xBCDE0395, 0xE52F, 0x467C, {0x8E, 0x3D, 0xC4, 0x57, 0x92, 0x91, 0x69, 0x2E}};
+static const GUID kIIDDeviceEnumerator = {0xA95664D2, 0x9614, 0x4F35, {0xA7, 0x46, 0xDE, 0x8D, 0xB6, 0x36, 0x17, 0xE6}};
+static const GUID kIIDSessionManager2 = {0x77AA99A0, 0x1BD6, 0x484F, {0x8B, 0xC7, 0x2C, 0x65, 0x4C, 0x9A, 0x9B, 0x6F}};
+static const GUID kIIDSessionControl2 = {0xBFB7FF88, 0x7239, 0x4FC9, {0x8F, 0xA2, 0x07, 0xC9, 0x50, 0xBE, 0x9C, 0x6D}};
+
+// Une ligne par programme ayant une session audio, sur toutes les sorties :
+// c'est la liste du mélangeur de volume de Windows, applications en
+// arrière-plan comprises.
+static int listApps() {
+  CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+  IMMDeviceEnumerator *en = nullptr;
+  if (FAILED(CoCreateInstance(kCLSIDDeviceEnumerator, nullptr, CLSCTX_ALL, kIIDDeviceEnumerator, reinterpret_cast<void **>(&en)))) return fail("Liste des peripheriques indisponible", E_FAIL);
+  IMMDeviceCollection *devices = nullptr;
+  en->EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE, &devices);
+  UINT count = 0;
+  if (devices) devices->GetCount(&count);
+  wchar_t seen[64][MAX_PATH];
+  int nSeen = 0;
+  for (UINT d = 0; d < count; d++) {
+    IMMDevice *dev = nullptr;
+    if (FAILED(devices->Item(d, &dev))) continue;
+    IAudioSessionManager2 *mgr = nullptr;
+    if (SUCCEEDED(dev->Activate(kIIDSessionManager2, CLSCTX_ALL, nullptr, reinterpret_cast<void **>(&mgr)))) {
+      IAudioSessionEnumerator *sessions = nullptr;
+      if (SUCCEEDED(mgr->GetSessionEnumerator(&sessions))) {
+        int n = 0;
+        sessions->GetCount(&n);
+        for (int i = 0; i < n; i++) {
+          IAudioSessionControl *ctl = nullptr;
+          if (FAILED(sessions->GetSession(i, &ctl))) continue;
+          IAudioSessionControl2 *ctl2 = nullptr;
+          if (SUCCEEDED(ctl->QueryInterface(kIIDSessionControl2, reinterpret_cast<void **>(&ctl2)))) {
+            DWORD pid = 0;
+            ctl2->GetProcessId(&pid);
+            wchar_t exe[MAX_PATH];
+            if (pid && pid != GetCurrentProcessId()) exeName(pid, exe, MAX_PATH);
+            else exe[0] = 0;
+            bool dup = !exe[0];
+            for (int k = 0; k < nSeen && !dup; k++)
+              if (_wcsicmp(seen[k], exe) == 0) dup = true;
+            if (!dup && nSeen < 64) {
+              lstrcpynW(seen[nSeen++], exe, MAX_PATH);
+              printUtf8(exe);
+              fputs("\n", stdout);
+            }
+            ctl2->Release();
+          }
+          ctl->Release();
+        }
+        sessions->Release();
+      }
+      mgr->Release();
+    }
+    dev->Release();
+  }
+  if (devices) devices->Release();
+  en->Release();
+  fflush(stdout);
+  return 0;
+}
+
+int wmain(int argc, wchar_t **argv) {
+  if (argc < 2) {
+    fprintf(stderr, "Usage : window-audio.exe hwnd:<handle> | pid:<pid> | exclude:<pid> | games:<pid> | exe:<nom.exe> | apps | prio:<pid>,...\n");
+    return 2;
+  }
+  const wchar_t *arg = argv[1];
+  if (wcsncmp(arg, L"games:", 6) == 0) return watchGames(wcstoul(arg + 6, nullptr, 10));
+  if (wcsncmp(arg, L"prio:", 5) == 0) return raisePriority(arg + 5);
+  if (wcscmp(arg, L"apps") == 0) return listApps();
+  if (wcsncmp(arg, L"exe:", 4) == 0) {
+    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    _setmode(_fileno(stdout), _O_BINARY);
+    CreateThread(nullptr, 0, watchStdin, nullptr, 0, nullptr);
+    return captureExe(arg + 4);
+  }
+  DWORD pid = 0;
+  MS_LOOPBACK_MODE mode = MS_LOOPBACK_INCLUDE_TREE;
+  if (wcsncmp(arg, L"hwnd:", 5) == 0) {
+    HWND hwnd = reinterpret_cast<HWND>(static_cast<uintptr_t>(_wcstoui64(arg + 5, nullptr, 10)));
+    GetWindowThreadProcessId(hwnd, &pid);
+    // MyStream mémorise le programme : la prochaine fois, il le retrouvera même sans fenêtre.
+    wchar_t exe[MAX_PATH];
+    char utf8[MAX_PATH * 3];
+    exeName(pid, exe, MAX_PATH);
+    if (exe[0] && WideCharToMultiByte(CP_UTF8, 0, exe, -1, utf8, sizeof(utf8), nullptr, nullptr) > 0) {
+      fprintf(stderr, "state exe %s\n", utf8);
+      fflush(stderr);
+    }
+  } else if (wcsncmp(arg, L"pid:", 4) == 0) {
+    pid = wcstoul(arg + 4, nullptr, 10);
+  } else if (wcsncmp(arg, L"exclude:", 8) == 0) {
+    pid = wcstoul(arg + 8, nullptr, 10);
+    mode = MS_LOOPBACK_EXCLUDE_TREE;
+  }
+  if (!pid) return fail("Fenetre ou processus introuvable", E_INVALIDARG);
+
+  CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+  _setmode(_fileno(stdout), _O_BINARY);
+  CreateThread(nullptr, 0, watchStdin, nullptr, 0, nullptr);
+  int r = capture(pid, mode, nullptr);
+  return r < 0 ? 0 : r;
 }
