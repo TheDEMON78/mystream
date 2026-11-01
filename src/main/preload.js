@@ -55,6 +55,7 @@ contextBridge.exposeInMainWorld('api', {
   gameWatch: (id, on) => ipcRenderer.send('game:watch', id, on),
   gameCurrent: () => ipcRenderer.invoke('game:current'),
   onGameChanged: listen('game:changed'),
+  onGameForeground: listen('game:foreground'),
   updateCheck: () => ipcRenderer.invoke('update:check'),
   updateState: () => ipcRenderer.invoke('update:state'),
   updateInstall: () => ipcRenderer.send('update:install'),

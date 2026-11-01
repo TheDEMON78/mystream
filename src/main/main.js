@@ -21,6 +21,8 @@ app.commandLine.appendSwitch('disable-renderer-backgrounding');
 app.commandLine.appendSwitch('disable-background-timer-throttling');
 app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+// Capture des fenêtres par Windows Graphics Capture (carte graphique) plutôt que GDI, lent avec les jeux.
+app.commandLine.appendSwitch('enable-features', 'AllowWgcWindowCapturer');
 // PC portables à deux cartes graphiques : toujours la plus puissante.
 app.commandLine.appendSwitch('force_high_performance_gpu');
 

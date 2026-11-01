@@ -232,7 +232,9 @@
     async start() {
       if (!MS.appInfo.windowAudio) return this.fail(new Error('Nécessite Windows 10 version 2004 ou plus récent'));
       this.onGame = (g) => this.setGame(g);
+      this.onForeground = (fg) => this.setForeground(fg);
       MS.on('game:changed', this.onGame);
+      MS.on('game:foreground', this.onForeground);
       window.api.gameWatch(this.src.id, true);
       this.markReady();
       this.setGame(await window.api.gameCurrent());
@@ -244,15 +246,37 @@
       return this.video ? this.video.videoHeight : 0;
     }
     drawable() {
+      if (this.frozen) return this.frozen;
       return this.video && this.video.readyState >= 2 ? this.video : null;
+    }
+    /** Capture de l'écran du jeu (le plus fluide), ou de sa fenêtre si l'écran est introuvable ou si on le demande. */
+    sourceOf(g) {
+      return this.src.settings.captureMode !== 'window' && g.screenId ? g.screenId : g.id;
+    }
+    /**
+     * Alt+Tab pendant une capture d'écran : on garde la dernière image du jeu
+     * au lieu de montrer le bureau ou une autre application.
+     */
+    setForeground(fg) {
+      if (fg || !this.video || this.captured !== this.game.screenId || this.video.readyState < 2) {
+        this.frozen = null;
+        return;
+      }
+      const c = document.createElement('canvas');
+      c.width = this.video.videoWidth;
+      c.height = this.video.videoHeight;
+      c.getContext('2d').drawImage(this.video, 0, 0);
+      this.frozen = c;
     }
     /** Nom du jeu capturé (affiché dans la liste des sources). */
     get status() {
       return this.game ? `${this.game.title || this.game.exe}` : 'En attente d’un jeu en plein écran';
     }
     async setGame(g) {
-      if (this.disposed || (g && g.id) === (this.game && this.game.id)) return;
+      const key = (x) => (x ? `${x.id}|${x.screenId}` : '');
+      if (this.disposed || key(g) === key(this.game)) return;
       this.game = g || null;
+      this.frozen = null;
       const token = (this.token = (this.token || 0) + 1);
       this.stopVideo();
       this.syncAudio();
@@ -262,9 +286,10 @@
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
           audio: false,
-          video: { mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: g.id, maxWidth: width, maxHeight: height, maxFrameRate: fps } },
+          video: { mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: this.sourceOf(g), maxWidth: width, maxHeight: height, maxFrameRate: fps } },
         });
         if (token !== this.token || this.disposed) return stream.getTracks().forEach((t) => t.stop());
+        this.captured = this.sourceOf(g);
         const v = document.createElement('video');
         v.muted = true;
         v.playsInline = true;
@@ -308,6 +333,7 @@
     dispose() {
       super.dispose();
       if (this.onGame) MS.off('game:changed', this.onGame);
+      if (this.onForeground) MS.off('game:foreground', this.onForeground);
       window.api.gameWatch(this.src.id, false);
       this.stopVideo();
       if (this.pcm) window.api.winAudioStop(this.src.id);
@@ -838,6 +864,7 @@
     }
   });
   window.api.onGameChanged((g) => MS.emit('game:changed', g));
+  window.api.onGameForeground((fg) => MS.emit('game:foreground', fg));
   window.api.onWinAudioData(({ id, data }) => {
     const rt = MS.runtimes.get(id);
     if (rt && rt.pushAudio) rt.pushAudio(data);
@@ -890,11 +917,20 @@
     game_capture: {
       label: 'Capture de jeu (automatique)',
       glyph: '🎮',
-      defaults: () => ({ captureAudio: true }),
+      defaults: () => ({ captureAudio: true, captureMode: 'screen' }),
       create: (src) => new GameCaptureRuntime(src),
       fields: () => [
-        { type: 'info', text: "Aucun réglage nécessaire : MyStream détecte le jeu ou l'application affiché en plein écran ou en fenêtré sans bordure, et capture aussi son son. Lancez votre jeu, il apparaît automatiquement. Il reste capturé pendant un Alt+Tab, jusqu'à sa fermeture ou jusqu'à ce qu'une autre application passe en plein écran." },
+        { type: 'info', text: "Aucun réglage nécessaire : MyStream détecte le jeu ou l'application affiché en plein écran ou en fenêtré sans bordure, et capture aussi son son. Lancez votre jeu, il apparaît automatiquement. Pendant un Alt+Tab, la dernière image du jeu reste affichée : votre bureau n'apparaît pas dans le stream." },
         { key: 'captureAudio', type: 'checkbox', label: 'Capturer le son du jeu' },
+        {
+          key: 'captureMode',
+          type: 'select',
+          label: 'Méthode de capture',
+          options: [
+            { value: 'screen', label: 'Écran du jeu : la plus fluide, sans ralentir le jeu (recommandée)' },
+            { value: 'window', label: 'Fenêtre du jeu : plus lente, pour un jeu qui ne couvre pas tout l’écran' },
+          ],
+        },
       ],
     },
     display_capture: {

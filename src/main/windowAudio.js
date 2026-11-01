@@ -5,7 +5,7 @@
 const path = require('path');
 const fs = require('fs');
 const { spawn, execFile } = require('child_process');
-const { app } = require('electron');
+const { app, screen, desktopCapturer } = require('electron');
 const logger = require('./logger');
 
 const captures = new Map();
@@ -97,11 +97,26 @@ function watchGames(id, on, send) {
     proc.stdout.on('data', (chunk) => {
       const lines = (rest + chunk).split('\n');
       rest = lines.pop();
-      for (const line of lines) {
-        const m = /^game (\d+) (\d+)\t([^\t]*)\t(.*)$/.exec(line.trim());
-        gameWatch.current = m ? { id: `window:${m[1]}:0`, pid: Number(m[2]), exe: m[3], title: m[4] } : null;
-        logger.info('Capture de jeu :', gameWatch.current ? `${gameWatch.current.exe} (${gameWatch.current.title})` : 'aucun jeu en plein écran');
-        gameWatch.send('game:changed', gameWatch.current);
+      for (const raw of lines) {
+        const line = raw.trim();
+        const fg = /^fg ([01])$/.exec(line);
+        if (fg) {
+          if (gameWatch.current) gameWatch.send('game:foreground', fg[1] === '1');
+          continue;
+        }
+        const m = /^game (\d+) (\d+)\t([^\t]*)\t([^\t]*)\t(-?\d+),(-?\d+),(-?\d+),(-?\d+)$/.exec(line);
+        const game = m ? { id: `window:${m[1]}:0`, pid: Number(m[2]), exe: m[3], title: m[4], screenId: null } : null;
+        gameWatch.current = game;
+        logger.info('Capture de jeu :', game ? `${game.exe} (${game.title})` : 'aucun jeu en plein écran');
+        if (!game) {
+          gameWatch.send('game:changed', null);
+          continue;
+        }
+        screenOf(m.slice(5, 9).map(Number)).then((screenId) => {
+          if (gameWatch.current !== game) return;
+          game.screenId = screenId;
+          gameWatch.send('game:changed', game);
+        });
       }
     });
     proc.on('close', () => {
@@ -180,6 +195,26 @@ function gpuPriority() {
   if (!priority) return null;
   const levels = priority.map((p) => p.gpu);
   return levels.includes('realtime') ? 'realtime' : levels.includes('high') ? 'high' : 'none';
+}
+
+/**
+ * Écran (source de capture Chromium) qui affiche le jeu, d'après son rectangle
+ * en pixels physiques. Capturer l'écran passe par la duplication d'écran de la
+ * carte graphique : bien plus fluide et léger que la capture de la fenêtre
+ * d'un jeu, qui fait aussi ramer le jeu.
+ */
+async function screenOf([left, top, right, bottom]) {
+  try {
+    const dip = screen.screenToDipRect(null, { x: left, y: top, width: right - left, height: bottom - top });
+    const display = screen.getAllDisplays().find((d) => Math.abs(d.bounds.x - dip.x) <= 2 && Math.abs(d.bounds.y - dip.y) <= 2 && Math.abs(d.bounds.width - dip.width) <= 2);
+    if (!display) return null;
+    const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 0, height: 0 } });
+    const src = sources.find((x) => x.display_id === String(display.id));
+    return src ? src.id : null;
+  } catch (e) {
+    logger.warn('Écran du jeu introuvable :', e.message);
+    return null;
+  }
 }
 
 function stopAll() {

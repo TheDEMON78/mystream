@@ -159,13 +159,16 @@ static void printUtf8(const wchar_t *text) {
   fputs(buf, stdout);
 }
 
-// Une ligne par changement : « game <hwnd> <pid>\t<programme>\t<titre> » ou
-// « none ». Le jeu reste capturé tant que sa fenêtre existe (alt-tab compris),
-// jusqu'à ce qu'une autre application passe en plein écran.
+// Une ligne par changement : « game <hwnd> <pid>\t<programme>\t<titre>\t<g>,<h>,<d>,<b> »
+// (le dernier champ : rectangle de l'écran du jeu, en pixels) ou « none », puis
+// « fg 1 » / « fg 0 » quand le jeu passe au premier plan ou le quitte (alt-tab).
+// Le jeu reste capturé tant que sa fenêtre existe, jusqu'à ce qu'une autre
+// application passe en plein écran.
 static int watchGames(DWORD ownPid) {
   CreateThread(nullptr, 0, watchStdin, nullptr, 0, nullptr);
   HWND current = nullptr;
   bool announced = false;
+  int foreground = -1;
   for (;;) {
     HWND fg = GetForegroundWindow();
     HWND next = current;
@@ -174,6 +177,7 @@ static int watchGames(DWORD ownPid) {
     if (next != current || !announced) {
       current = next;
       announced = true;
+      foreground = -1;
       if (current) {
         DWORD pid = 0;
         GetWindowThreadProcessId(current, &pid);
@@ -181,17 +185,28 @@ static int watchGames(DWORD ownPid) {
         wchar_t title[256];
         exeName(pid, exe, MAX_PATH);
         GetWindowTextW(current, title, 256);
+        MONITORINFO mi = {};
+        mi.cbSize = sizeof(mi);
+        GetMonitorInfoW(MonitorFromWindow(current, MONITOR_DEFAULTTONEAREST), &mi);
         printf("game %llu %lu\t", static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(current)), static_cast<unsigned long>(pid));
         printUtf8(exe);
         fputs("\t", stdout);
         printUtf8(title);
-        fputs("\n", stdout);
+        printf("\t%ld,%ld,%ld,%ld\n", mi.rcMonitor.left, mi.rcMonitor.top, mi.rcMonitor.right, mi.rcMonitor.bottom);
       } else {
         fputs("none\n", stdout);
       }
       fflush(stdout);
     }
-    Sleep(1000);
+    if (current) {
+      int isFg = fg == current ? 1 : 0;
+      if (isFg != foreground) {
+        foreground = isFg;
+        printf("fg %d\n", isFg);
+        fflush(stdout);
+      }
+    }
+    Sleep(foreground == 0 ? 250 : 1000);
   }
 }
 
