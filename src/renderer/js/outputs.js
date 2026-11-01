@@ -254,7 +254,6 @@
           const tips = ['limitez les images par seconde du jeu (VSync ou limite à 120 i/s)'];
           if (MS.store.settings.ui.preview !== false) tips.push('masquez l’aperçu');
           if (MS.store.settings.stream.encoder !== 'copy') tips.push('choisissez l’encodeur « Sans réencodage » (Paramètres > Stream)');
-          if (MS.gpuPriority !== 'realtime') tips.push('lancez MyStream en tant qu’administrateur pour qu’il passe avant le jeu, comme OBS');
           message = `Carte graphique saturée (${lagged} images manquées en 2 s), sans doute par le jeu : ${tips.join(', ')}.`;
         } else {
           message = `Rendu surchargé (${lagged} images manquées en 2 s) : réduisez la résolution ou le nombre d'images par seconde, ou retirez des sources lourdes (pages web animées, captures multiples).`;

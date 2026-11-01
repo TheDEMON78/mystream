@@ -695,6 +695,8 @@
         video: st.video,
         stream: { service: st.stream.service, encoder: st.stream.encoder, used: MS.outputs.active.stream && MS.outputs.active.stream.encoder, videoBitrate: st.stream.videoBitrate, preset: st.stream.preset },
         render: { fps: round(s.fps), renderMs: round(s.renderMs), sendMs: round(s.sendMs || 0), maxLateMs: round(s.maxLateMs), lagged: s.lagged, total: s.total, longTasks: s.longTasks, longTaskMs: Math.round(s.longTaskMs) },
+        freezes: s.freezes,
+        uptime: Math.round(performance.now() / 1000),
         encoder: out && out.progress,
         lost: session && { total: session.lost(), encoder: session.encoderDrops, percent: round(session.lostPercent()), minutes: round(session.elapsed() / 60000) },
         health: MS.outputs.health,

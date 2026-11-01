@@ -61,7 +61,11 @@
   MS.off = (evt, fn) => {
     listeners[evt] = (listeners[evt] || []).filter((f) => f !== fn);
   };
+  // Derniers événements (diagnostic : ce qui se passait juste avant un blocage).
+  MS.recentEvents = [];
   MS.emit = (evt, ...args) => {
+    MS.recentEvents.push({ evt, t: performance.now() });
+    if (MS.recentEvents.length > 40) MS.recentEvents.shift();
     for (const fn of listeners[evt] || []) {
       try {
         fn(...args);

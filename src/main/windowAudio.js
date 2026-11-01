@@ -176,7 +176,9 @@ let priority = null;
  * lancer MyStream en administrateur ; sinon on obtient la priorité « haute »
  * quand Windows l'accorde.
  */
-function raisePriority(pids) {
+function raisePriority(targets) {
+  // targets : [{ pid, type }] (type : Browser, Tab, GPU, FFmpeg…)
+  const pids = targets.map((t) => t.pid);
   if (!available() || !pids.length) return Promise.resolve(null);
   return new Promise((resolve) => {
     execFile(helperPath(), [`prio:${pids.join(',')}`], { windowsHide: true, timeout: 5000 }, (err, stdout) => {
@@ -184,23 +186,28 @@ function raisePriority(pids) {
         logger.warn('Priorité impossible :', err.message);
         return resolve(null);
       }
-      priority = String(stdout)
+      const at = Math.round(process.uptime());
+      const results = String(stdout)
         .trim()
         .split(/\r?\n/)
-        .map((line) => /^(\d+) cpu=(\d) gpu=(\w+)/.exec(line))
+        .map((line) => /^(\d+) cpu=(\d) gpu=(\w+)(?: ms=(\d+))?/.exec(line))
         .filter(Boolean)
-        .map((m) => ({ pid: Number(m[1]), cpu: m[2] === '1', gpu: m[3] }));
-      logger.info('Priorité :', priority.map((p) => `${p.pid} cpu=${p.cpu} gpu=${p.gpu}`).join(' · '));
-      resolve(priority);
+        .map((m) => ({ pid: Number(m[1]), type: (targets.find((t) => t.pid === Number(m[1])) || {}).type, cpu: m[2] === '1', gpu: m[3], ms: Number(m[4] || 0), at }));
+      // On garde le dernier résultat de chaque processus (diagnostic).
+      const byPid = new Map((priority || []).map((p) => [p.pid, p]));
+      for (const r of results) byPid.set(r.pid, r);
+      priority = [...byPid.values()];
+      logger.info('Priorité :', results.map((p) => `${p.type} ${p.pid} cpu=${p.cpu} gpu=${p.gpu} (${p.ms} ms)`).join(' · '));
+      resolve(results);
     });
   });
 }
 
-/** Meilleure priorité GPU obtenue : « realtime », « high » ou « none ». */
+/** Meilleure priorité GPU obtenue : « high » ou « none ». */
 function gpuPriority() {
   if (!priority) return null;
   const levels = priority.map((p) => p.gpu);
-  return levels.includes('realtime') ? 'realtime' : levels.includes('high') ? 'high' : 'none';
+  return levels.includes('high') ? 'high' : 'none';
 }
 
 /**

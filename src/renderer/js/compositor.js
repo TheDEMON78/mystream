@@ -135,7 +135,7 @@
     timer: null,
     transition: null,
     chromas: new Map(),
-    stats: { fps: 0, renderMs: 0, lagged: 0, total: 0, maxLateMs: 0, longTasks: 0, longTaskMs: 0 },
+    stats: { fps: 0, renderMs: 0, lagged: 0, total: 0, maxLateMs: 0, longTasks: 0, longTaskMs: 0, freezes: [] },
 
     init(canvas, studioCanvas) {
       this.canvas = canvas;
@@ -149,6 +149,20 @@
           for (const e of list.getEntries()) {
             this.stats.longTasks++;
             this.stats.longTaskMs += e.duration;
+            // Blocages notables : quand, combien de temps, et ce qui venait de se passer.
+            if (e.duration >= 200) {
+              const before = MS.recentEvents.filter((x) => x.t >= e.startTime - 2000 && x.t <= e.startTime + e.duration).map((x) => x.evt);
+              this.stats.freezes.push({
+                at: Math.round(e.startTime / 1000),
+                ms: Math.round(e.duration),
+                live: Boolean(MS.outputs.active.stream || MS.outputs.reconnect),
+                record: Boolean(MS.outputs.active.record),
+                dialog: Boolean(document.querySelector('.modal-backdrop')),
+                hidden: document.hidden,
+                events: [...new Set(before)].slice(-8),
+              });
+              if (this.stats.freezes.length > 20) this.stats.freezes.shift();
+            }
           }
         }).observe({ type: 'longtask' });
       } catch {

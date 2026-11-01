@@ -210,7 +210,7 @@ ipcMain.handle('output:start', async (_e, opts) => {
     return { ok: false, error: e.message };
   }
   outputs.set(out.id, out);
-  boostPriority(out.proc && out.proc.pid);
+  if (out.proc && out.proc.pid) windowAudio.raisePriority([{ pid: out.proc.pid, type: 'FFmpeg' }]);
   logger.info(`Démarrage ${opts.kind}`, out.file || '', out.encoder || '', opts.mime);
   return { ok: true, id: out.id, file: out.file || null, encoder: out.encoder || null };
 });
@@ -563,29 +563,30 @@ ipcMain.handle('app:stats', () => {
 });
 
 /** Mesures techniques pour le diagnostic de performance (aucune donnée personnelle). */
-ipcMain.handle('app:diagnostic', () => ({
+ipcMain.handle('app:diagnostic', async () => ({
   gpu: app.getGPUFeatureStatus(),
   priority: windowAudio.priority(),
-  admin: process.platform === 'win32' ? isAdmin() : null,
+  admin: process.platform === 'win32' ? await isAdmin() : null,
+  uptime: Math.round(process.uptime()),
   processes: app.getAppMetrics().map((m) => ({ type: m.type, cpu: Math.round(m.cpu.percentCPUUsage * 10) / 10, memMB: Math.round((m.memory ? m.memory.workingSetSize : 0) / 1024) })),
   cpus: os.cpus().length,
   cpuModel: (os.cpus()[0] || {}).model,
 }));
 
 function isAdmin() {
-  try {
-    require('child_process').execFileSync('net', ['session'], { stdio: 'ignore', windowsHide: true });
-    return true;
-  } catch {
-    return false;
-  }
+  return new Promise((resolve) => require('child_process').execFile('net', ['session'], { windowsHide: true }, (err) => resolve(!err)));
 }
 
-/** Priorité processeur et GPU de MyStream (et de FFmpeg) face au jeu. */
-function boostPriority(extraPid) {
+/**
+ * Priorité processeur et GPU de MyStream face au jeu, une seule fois au
+ * démarrage. Le processus GPU (celui qui dessine et encode) est le plus
+ * important : s'il n'existe pas encore, on réessaie un peu plus tard.
+ */
+function boostPriority(attempt = 0) {
   if (process.platform !== 'win32' || !win || win.isDestroyed()) return;
-  const gpu = app.getAppMetrics().filter((m) => m.type === 'GPU').map((m) => m.pid);
-  windowAudio.raisePriority([process.pid, win.webContents.getOSProcessId(), ...gpu, extraPid].filter(Boolean));
+  const gpu = app.getAppMetrics().filter((m) => m.type === 'GPU');
+  if (!gpu.length && attempt < 6) return setTimeout(() => boostPriority(attempt + 1), 5000);
+  windowAudio.raisePriority([{ pid: process.pid, type: 'Browser' }, { pid: win.webContents.getOSProcessId(), type: 'Tab' }, ...gpu.map((m) => ({ pid: m.pid, type: 'GPU' }))]);
 }
 
 ipcMain.on('app:quit', () => {

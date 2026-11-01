@@ -213,9 +213,9 @@ static int watchGames(DWORD ownPid) {
 // Priorité de MyStream face au jeu, comme OBS : sans elle, un jeu qui
 // occupe toute la carte graphique passe avant le rendu et l'encodage du
 // stream (saccades et gels). Priorité processeur « au-dessus de la normale »
-// et priorité GPU « temps réel » (administrateur) ou « haute » sinon, et pas
+// et priorité GPU « haute », et pas
 // de bridage d'énergie par Windows.
-// Affiche une ligne par processus : <pid> cpu=<0|1> gpu=<realtime|high|none>.
+// Affiche une ligne par processus : <pid> cpu=<0|1> gpu=<high|none> ms=<durée>.
 typedef LONG(WINAPI *SetGpuPriorityFn)(HANDLE, int);
 // PROCESS_POWER_THROTTLING_STATE (processthreadsapi.h), recopiée pour MinGW.
 struct MS_POWER_THROTTLING {
@@ -228,7 +228,6 @@ static const int kProcessPowerThrottling = 4;
 static const ULONG kThrottleExecutionSpeed = 0x1;
 static const ULONG kThrottleIgnoreTimerResolution = 0x4;
 static const int kGpuPriorityHigh = 4;
-static const int kGpuPriorityRealtime = 5;
 
 static void enablePrivilege(const wchar_t *name) {
   HANDLE token;
@@ -268,9 +267,11 @@ static int raisePriority(const wchar_t *list) {
       }
     }
     const char *gpu = "none";
-    if (setGpu && setGpu(h, kGpuPriorityRealtime) == 0) gpu = "realtime";
-    else if (setGpu && setGpu(h, kGpuPriorityHigh) == 0) gpu = "high";
-    printf("%lu cpu=%d gpu=%s\n", pid, cpu ? 1 : 0, gpu);
+    // Priorité GPU « haute » seulement : la priorité « temps réel » peut figer la
+    // carte graphique plusieurs secondes au moment où elle est appliquée.
+    const ULONGLONG t0 = GetTickCount64();
+    if (setGpu && setGpu(h, kGpuPriorityHigh) == 0) gpu = "high";
+    printf("%lu cpu=%d gpu=%s ms=%llu\n", pid, cpu ? 1 : 0, gpu, GetTickCount64() - t0);
     CloseHandle(h);
   }
   fflush(stdout);
