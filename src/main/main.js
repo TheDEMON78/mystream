@@ -479,6 +479,7 @@ ipcMain.handle('twitch:badges', async (_e, channel) => {
   return map;
 });
 
+browserSources.setGpuTarget(() => (win && !win.isDestroyed() ? win.webContents : null));
 ipcMain.on('browser:create', (_e, id, opts) => browserSources.create(id, opts, send));
 ipcMain.on('browser:destroy', (_e, id) => browserSources.destroy(id));
 ipcMain.on('browser:reload', (_e, id) => browserSources.reload(id));

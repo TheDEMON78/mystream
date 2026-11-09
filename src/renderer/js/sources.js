@@ -950,7 +950,10 @@
       this.ctx = this.canvas.getContext('2d');
       this.audioOn = Boolean(this.src.settings.audio);
       this.signature = this.sig();
-      window.api.browserCreate(this.src.id, { ...this.src.settings, maxFps: MS.store.settings.video.fps });
+      window.api.browserCreate(this.src.id, this.createOpts());
+    }
+    createOpts() {
+      return { ...this.src.settings, maxFps: MS.store.settings.video.fps, gpu: MS.store.settings.ui.browserGpu !== false };
     }
     sig() {
       const s = this.src.settings;
@@ -965,7 +968,8 @@
         return;
       }
       this.signature = this.sig();
-      window.api.browserCreate(this.src.id, { ...this.src.settings, maxFps: MS.store.settings.video.fps });
+      this.closeTexture();
+      window.api.browserCreate(this.src.id, this.createOpts());
     }
     hasAudio() {
       return this.audioOn;
@@ -981,6 +985,7 @@
     /** Reçoit uniquement la zone modifiée, déjà convertie en RGBA par le processus principal. */
     onFrame({ width, height, x, y, w, h, data }) {
       if (this.disposed) return;
+      this.closeTexture(); // retour au rendu classique
       if (this.canvas.width !== width || this.canvas.height !== height) {
         this.canvas.width = width;
         this.canvas.height = height;
@@ -988,13 +993,27 @@
       this.ctx.putImageData(new ImageData(new Uint8ClampedArray(data.buffer, data.byteOffset, w * h * 4), w, h), x, y);
       if (!this.ready) this.markReady();
     }
+    /** Image rendue sur la carte graphique : gardée telle quelle, sans copie. */
+    onTexture(frame) {
+      if (this.disposed) return frame.close();
+      if (this.texture) this.texture.close();
+      this.texture = frame;
+      if (!this.ready) this.markReady();
+    }
+    closeTexture() {
+      if (this.texture) this.texture.close();
+      this.texture = null;
+    }
     get width() {
+      if (this.texture) return this.texture.displayWidth;
       return this.ready ? this.canvas.width : 0;
     }
     get height() {
+      if (this.texture) return this.texture.displayHeight;
       return this.ready ? this.canvas.height : 0;
     }
     drawable() {
+      if (this.texture) return this.texture;
       return this.ready ? this.canvas : null;
     }
     /** Hors de la scène : la page tourne toujours (son des alertes) mais n'est plus dessinée. */
@@ -1011,10 +1030,16 @@
     }
     dispose() {
       super.dispose();
+      this.closeTexture();
       window.api.browserDestroy(this.src.id);
     }
   }
 
+  window.api.onBrowserTexture((id, frame) => {
+    const rt = MS.runtimes.get(id);
+    if (rt && rt.onTexture) rt.onTexture(frame);
+    else frame.close();
+  });
   window.api.onBrowserFrame((f) => {
     const rt = MS.runtimes.get(f.id);
     try {

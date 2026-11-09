@@ -582,6 +582,7 @@
           { key: 'confirmStopStream', type: 'checkbox', label: 'Demander confirmation avant d’arrêter le streaming' },
           { key: 'minimizeToTray', type: 'checkbox', label: 'Réduire dans la zone de notification' },
           { key: 'autoHidePreview', type: 'checkbox', label: 'Pendant un live, masquer l’aperçu quand MyStream n’est pas au premier plan (allège la carte graphique en jeu)' },
+          { key: 'browserGpu', type: 'checkbox', label: 'Sources Navigateur rendues directement sur la carte graphique (plus léger ; décochez si une page s’affiche mal)' },
           { type: 'section', label: 'Raccourcis clavier (fonctionnent même en jeu)' },
           ...Object.entries(MS.HOTKEY_LABELS).map(([key, label]) => ({ key: `hk_${key}`, type: 'hotkey', label })),
         ],
@@ -589,6 +590,7 @@
           confirmStopStream: st.ui.confirmStopStream,
           minimizeToTray: st.ui.minimizeToTray,
           autoHidePreview: st.ui.autoHidePreview,
+          browserGpu: st.ui.browserGpu !== false,
           ...Object.fromEntries(Object.keys(MS.HOTKEY_LABELS).map((k) => [`hk_${k}`, (st.ui.hotkeys || {})[k] || ''])),
         },
       },
@@ -645,6 +647,7 @@
           confirmStopStream: d.ui.confirmStopStream,
           minimizeToTray: d.ui.minimizeToTray,
           autoHidePreview: d.ui.autoHidePreview,
+          browserGpu: true,
           ...Object.fromEntries(Object.keys(MS.HOTKEY_LABELS).map((k) => [`hk_${k}`, ''])),
         },
       };
@@ -675,6 +678,15 @@
     st.ui.confirmStopStream = g.confirmStopStream;
     st.ui.minimizeToTray = g.minimizeToTray;
     st.ui.autoHidePreview = g.autoHidePreview;
+    if (Boolean(g.browserGpu) !== (st.ui.browserGpu !== false)) {
+      st.ui.browserGpu = Boolean(g.browserGpu);
+      // Les pages sont recréées avec le nouveau mode de rendu.
+      for (const src of Object.values(MS.store.data.sources)) {
+        if (src.type !== 'browser') continue;
+        MS.runtimes.dispose(src.id);
+        MS.runtimes.ensure(src);
+      }
+    }
     const hotkeysBefore = JSON.stringify(st.ui.hotkeys);
     st.ui.hotkeys = Object.fromEntries(Object.keys(MS.HOTKEY_LABELS).map((k) => [k, g[`hk_${k}`]]));
     if (JSON.stringify(st.ui.hotkeys) !== hotkeysBefore) MS.hotkeys.apply();

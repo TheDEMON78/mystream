@@ -1,8 +1,24 @@
 'use strict';
 
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, sharedTexture } = require('electron');
 
 const listen = (channel) => (fn) => ipcRenderer.on(channel, (_e, data) => fn(data));
+
+// Images des sources Navigateur rendues sur la carte graphique : reçues sous
+// forme de VideoFrame (texture GPU partagée), dessinées sans aucune copie.
+let onTexture = null;
+if (sharedTexture) {
+  sharedTexture.setSharedTextureReceiver(async (data, id) => {
+    const imported = data.importedSharedTexture;
+    try {
+      const frame = imported.getVideoFrame();
+      if (onTexture) onTexture(id, frame);
+      else frame.close();
+    } finally {
+      imported.release();
+    }
+  });
+}
 
 contextBridge.exposeInMainWorld('api', {
   loadConfig: () => ipcRenderer.invoke('config:load'),
@@ -39,6 +55,7 @@ contextBridge.exposeInMainWorld('api', {
   browserAck: (id) => ipcRenderer.send('browser:ack', id),
   browserPaint: (id, on) => ipcRenderer.send('browser:paint', id, on),
   onBrowserFrame: listen('browser:frame'),
+  onBrowserTexture: (fn) => (onTexture = fn),
   onBrowserError: listen('browser:error'),
   onBrowserAudio: listen('browser:audio'),
   winAudioStart: (id, captureId) => ipcRenderer.send('winaudio:start', id, captureId),

@@ -4,7 +4,8 @@
 // ses images sont transmises à l'interface, qui les dessine dans la scène.
 const path = require('path');
 const { Worker } = require('worker_threads');
-const { BrowserWindow } = require('electron');
+const { BrowserWindow, sharedTexture } = require('electron');
+const logger = require('./logger');
 
 const DEFAULT_CSS = 'body { background-color: rgba(0, 0, 0, 0); margin: 0px auto; overflow: hidden; }';
 const sources = new Map();
@@ -52,6 +53,52 @@ function flush(id) {
   convert({ id, width, height, x: r.x, y: r.y, w: r.width, h: r.height, data });
 }
 
+/**
+ * Rendu sur la carte graphique (Windows) : l'image de la page reste une
+ * texture GPU, transmise telle quelle à l'interface qui la dessine
+ * directement. Aucune copie vers le processeur, aucune conversion de pixels,
+ * aucun transfert d'image par IPC (le chemin classique en fait quatre).
+ */
+let gpuTarget = null; // () => webContents de l'interface
+let gpuBroken = false; // échecs répétés : retour au chemin classique pour toutes les sources
+const GPU_MAX_ERRORS = 3;
+
+function gpuPaint(id, s, tex) {
+  // Une image à la fois : si la précédente est encore en route, celle-ci est sautée (la suivante arrive aussitôt).
+  const target = gpuTarget && gpuTarget();
+  if (s.gpuBusy || !target || target.isDestroyed()) return tex.release();
+  s.gpuBusy = true;
+  let imported;
+  try {
+    imported = sharedTexture.importSharedTexture({ textureInfo: tex.textureInfo, allReferencesReleased: () => tex.release() });
+  } catch (err) {
+    s.gpuBusy = false;
+    tex.release();
+    return gpuFailed(id, s, err);
+  }
+  sharedTexture
+    .sendSharedTexture({ frame: target.mainFrame, importedSharedTexture: imported }, id)
+    .then(() => (s.gpuErrors = 0))
+    .catch((err) => gpuFailed(id, s, err))
+    .finally(() => {
+      imported.release();
+      s.gpuBusy = false;
+    });
+}
+
+function gpuFailed(id, s, err) {
+  s.gpuErrors = (s.gpuErrors || 0) + 1;
+  if (s.gpuErrors < GPU_MAX_ERRORS || gpuBroken) return;
+  gpuBroken = true;
+  logger.warn('Sources Navigateur : rendu GPU indisponible, retour au rendu classique.', err && err.message);
+  // Toutes les sources passent au rendu classique.
+  for (const [sid, st] of [...sources]) if (st.gpu) create(sid, st.opts, st.send);
+}
+
+function setGpuTarget(fn) {
+  gpuTarget = fn;
+}
+
 function ack(id) {
   const s = sources.get(id);
   if (!s) return;
@@ -87,6 +134,7 @@ function create(id, opts, send) {
   destroy(id);
   const width = Math.max(16, Math.min(4096, Number(opts.width) || 800));
   const height = Math.max(16, Math.min(4096, Number(opts.height) || 600));
+  const gpu = Boolean(opts.gpu && !gpuBroken && process.platform === 'win32' && sharedTexture);
   const win = new BrowserWindow({
     show: false,
     width,
@@ -96,7 +144,7 @@ function create(id, opts, send) {
     transparent: true,
     backgroundColor: '#00000000',
     webPreferences: {
-      offscreen: true,
+      offscreen: gpu ? { useSharedTexture: true } : true,
       partition: 'persist:browser-sources',
       preload: path.join(__dirname, 'browserPreload.js'),
       // Son capturé : les fichiers audio des alertes viennent souvent d'un autre site
@@ -114,8 +162,9 @@ function create(id, opts, send) {
   // Le son passe par le mixeur de MyStream (capturé dans la page), jamais directement par les haut-parleurs.
   wc.setAudioMuted(true);
   wc.setWindowOpenHandler(() => ({ action: 'deny' }));
-  const state = { win, send, audio: Boolean(opts.audio), busy: false, image: null, dirty: null, full: true, scale: 1 };
-  wc.on('paint', (_e, dirty, image) => {
+  const state = { win, send, opts, gpu, audio: Boolean(opts.audio), busy: false, image: null, dirty: null, full: true, scale: 1 };
+  wc.on('paint', (e, dirty, image) => {
+    if (e.texture) return gpuPaint(id, state, e.texture);
     const { width: w, height: h } = image.getSize();
     if (!w || !h) return;
     const prev = state.image && state.image.getSize();
@@ -178,4 +227,4 @@ function destroyAll() {
   for (const id of [...sources.keys()]) destroy(id);
 }
 
-module.exports = { create, destroy, setPainting, reload, destroyAll, ack, audioEnabled, audio, DEFAULT_CSS };
+module.exports = { create, destroy, setPainting, setGpuTarget, reload, destroyAll, ack, audioEnabled, audio, DEFAULT_CSS };
