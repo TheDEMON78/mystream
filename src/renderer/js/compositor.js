@@ -126,6 +126,52 @@
     return () => clearTimeout(t);
   }
 
+  /**
+   * Réveil précis à une heure donnée. Les minuteurs de Windows peuvent
+   * partir plusieurs millisecondes en retard (jusqu'à 15,6 ms sur batterie) :
+   * une image prévue à 16,7 ms tombe alors sur la suivante et elle est
+   * perdue. On se réveille donc un peu en avance, d'une marge apprise sur le
+   * retard réellement constaté (4 ms au plus), puis on attend l'heure exacte
+   * par messages (jamais retardés par Windows), en laissant passer les autres
+   * tâches de l'interface entre deux messages.
+   */
+  const clock = {
+    slack: 1,
+    lateMs: 0,
+    token: 0,
+    port: null,
+    at(fn, when) {
+      const token = ++this.token;
+      if (!this.port) {
+        const ch = new MessageChannel();
+        this.port = ch.port2;
+        ch.port1.onmessage = (e) => this.pending && e.data === this.token && this.pending();
+      }
+      const fire = () => {
+        if (token !== this.token) return;
+        if (performance.now() >= when - 0.25) {
+          this.pending = null;
+          fn();
+        } else {
+          this.pending = fire;
+          this.port.postMessage(token);
+        }
+      };
+      const wake = when - this.slack;
+      const cancel = schedule(() => {
+        // Retard du minuteur : la marge suit le pire retard récent, et redescend lentement.
+        const late = Math.max(0, performance.now() - wake);
+        this.lateMs = Math.max(late, this.lateMs * 0.98);
+        this.slack = Math.min(4, Math.max(1, this.lateMs + 0.5));
+        fire();
+      }, Math.max(0, wake - performance.now()));
+      return () => {
+        if (token === this.token) this.token++;
+        cancel();
+      };
+    },
+  };
+
   /* Compositeur ------------------------------------------------------------ */
   const compositor = {
     canvas: null,
@@ -249,7 +295,8 @@
       this.next = fromTimer ? this.next + this.interval : now + this.interval;
       if (this.cancel) this.cancel();
       this.due = this.next + (this.clock ? this.interval * 0.5 : 0);
-      this.cancel = schedule(() => this.tick(true), Math.max(0, this.due - performance.now()));
+      this.cancel = clock.at(() => this.tick(true), this.due);
+      this.stats.timerLateMs = clock.lateMs;
     },
 
     /** Choisit la capture qui sert d'horloge : la plus grande visible, si sa cadence suit celle du stream. */

@@ -81,6 +81,7 @@
 
   const outputs = {
     active: { record: null, stream: null },
+    last: { record: null, stream: null }, // dernière sortie terminée (diagnostic)
     busy: { record: false, stream: false },
     reconnect: null,
     health: { level: 'idle', message: '' },
@@ -168,6 +169,7 @@
       this.busy[kind] = true;
       MS.emit('outputs:changed');
       const res = await out.stop();
+      this.last[kind] = out;
       this.active[kind] = null;
       this.busy[kind] = false;
       MS.emit('outputs:changed');
@@ -186,6 +188,7 @@
         if (!out || out.id !== id) continue;
         if (out.recorder && out.recorder.state !== 'inactive') out.recorder.stop();
         window.api.outputStop(id);
+        this.last[kind] = out;
         this.active[kind] = null;
         window.api.log('error', `${kind} interrompu : ${error}`);
         if (kind === 'stream') this.scheduleReconnect(out, error);

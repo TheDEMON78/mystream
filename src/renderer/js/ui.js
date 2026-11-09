@@ -686,22 +686,23 @@
     async copyPerfDiagnostic() {
       const st = store().settings;
       const s = MS.compositor.stats;
-      const out = MS.outputs.active.stream || MS.outputs.active.record;
+      const o = MS.outputs;
+      const out = o.active.stream || o.active.record || o.last.stream || o.last.record;
       const session = MS.live.session;
       const round = (n) => Math.round(n * 10) / 10;
       const diag = {
         version: MS.appInfo.version,
         platform: MS.appInfo.platform,
         video: st.video,
-        stream: { service: st.stream.service, encoder: st.stream.encoder, used: MS.outputs.active.stream && MS.outputs.active.stream.encoder, videoBitrate: st.stream.videoBitrate, preset: st.stream.preset },
-        render: { fps: round(s.fps), renderMs: round(s.renderMs), sendMs: round(s.sendMs || 0), maxLateMs: round(s.maxLateMs), lagged: s.lagged, total: s.total, longTasks: s.longTasks, longTaskMs: Math.round(s.longTaskMs), synced: s.synced || 0 },
-        capture: [...MS.runtimes.map.values()].filter((rt) => rt.feed).map((rt) => ({ type: rt.src.type, w: rt.width, h: rt.height, fps: rt.feed.interval ? round(1000 / rt.feed.interval) : 0, direct: Boolean(rt.feed.reader), clock: rt === MS.compositor.clock })),
+        stream: { service: st.stream.service, encoder: st.stream.encoder, used: (o.active.stream || o.last.stream || {}).encoder || null, videoBitrate: st.stream.videoBitrate, preset: st.stream.preset },
+        render: { fps: round(s.fps), renderMs: round(s.renderMs), sendMs: round(s.sendMs || 0), maxLateMs: round(s.maxLateMs), lagged: s.lagged, total: s.total, longTasks: s.longTasks, longTaskMs: Math.round(s.longTaskMs), synced: s.synced || 0, timerLateMs: round(s.timerLateMs || 0) },
+        capture: [...MS.runtimes.map.values()].filter((rt) => /capture/.test(rt.src.type)).map((rt) => ({ type: rt.src.type, w: rt.width, h: rt.height, paused: rt.suspended, err: rt.error || undefined, fps: rt.feed && rt.feed.interval ? round(1000 / rt.feed.interval) : 0, direct: Boolean(rt.feed && rt.feed.reader), clock: rt === MS.compositor.clock })),
         freezes: s.freezes,
         uptime: Math.round(performance.now() / 1000),
         encoder: out && out.progress,
-        lost: session && { total: session.lost(), encoder: session.encoderDrops, percent: round(session.lostPercent()), minutes: round(session.elapsed() / 60000) },
+        lost: session ? { total: session.lost(), encoder: session.encoderDrops, percent: round(session.lostPercent()), minutes: round(session.elapsed() / 60000) } : MS.live.lastLost || null,
         health: MS.outputs.health,
-        sources: (store().editScene() || { items: [] }).items.filter((it) => it.visible).map((it) => (store().source(it.sourceId) || {}).type),
+        sources: (store().currentScene() || { items: [] }).items.filter((it) => it.visible).map((it) => (store().source(it.sourceId) || {}).type),
         system: await window.api.diagnostic().catch(() => null),
       };
       window.api.copyText(JSON.stringify(diag)).then(

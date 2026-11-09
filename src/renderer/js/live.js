@@ -153,6 +153,9 @@
         this.pollViewers();
       } else if (!on && this.session) {
         const summary = this.session.summary();
+        const s = this.session;
+        // Gardé pour le diagnostic copié depuis la fenêtre de fin de live.
+        this.lastLost = { total: s.lost(), encoder: s.encoderDrops, percent: Math.round(s.lostPercent() * 10) / 10, minutes: Math.round(s.elapsed() / 6000) / 10, ended: true };
         this.session = null;
         this.finish(summary);
       }
