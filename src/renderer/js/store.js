@@ -157,15 +157,20 @@
       return true;
     },
 
-    /** Copie d'une scène : mêmes sources (référencées, comme dans OBS), nouvelles positions indépendantes. */
-    duplicateScene(id) {
+    /**
+     * Copie d'une scène, positions indépendantes. Sources partagées par défaut
+     * (comme dans OBS) ; avec « independent », chaque source est copiée.
+     */
+    duplicateScene(id, independent) {
       const scene = this.scene(id);
       if (!scene) return null;
+      const name = this.uniqueName(`${scene.name} (copie)`, this.data.scenes.map((s) => s.name));
       const copy = {
         id: MS.uid(),
-        name: this.uniqueName(`${scene.name} (copie)`, this.data.scenes.map((s) => s.name)),
-        items: scene.items.map((it) => ({ ...it, id: MS.uid() })),
+        name,
+        items: scene.items.map((it) => ({ ...it, id: MS.uid(), sourceId: independent ? (this.cloneSource(it.sourceId, name) || { id: it.sourceId }).id : it.sourceId })),
       };
+      if (independent) MS.emit('sources:changed');
       this.data.scenes.splice(this.data.scenes.indexOf(scene) + 1, 0, copy);
       this.save();
       MS.emit('scenes:changed');
@@ -223,6 +228,53 @@
       if (!this.data.sources[id]) return;
       delete this.data.sources[id];
       for (const scene of this.data.scenes) scene.items = scene.items.filter((it) => it.sourceId !== id);
+      this.save();
+      MS.emit('sources:changed');
+      MS.emit('items:changed');
+    },
+
+    /** Scènes où la source apparaît. */
+    scenesUsing(id) {
+      return this.data.scenes.filter((s) => s.items.some((it) => it.sourceId === id));
+    },
+
+    /** Copie indépendante d'une source (mêmes réglages et filtres, nouvel identifiant). */
+    cloneSource(id, suffix) {
+      const src = this.source(id);
+      if (!src) return null;
+      const copy = JSON.parse(JSON.stringify(src));
+      copy.id = MS.uid();
+      copy.name = this.uniqueName(suffix ? `${src.name} (${suffix})` : src.name, Object.values(this.data.sources).map((s) => s.name));
+      delete copy.global;
+      this.data.sources[copy.id] = copy;
+      return copy;
+    },
+
+    /**
+     * Source partagée entre plusieurs scènes, comme dans OBS : la modifier
+     * dans une scène la modifie partout. Ici, l'élément de cette scène reçoit
+     * sa propre copie, réglable à part.
+     */
+    unlinkItem(sceneId, itemId) {
+      const item = this.item(sceneId, itemId);
+      const scene = this.scene(sceneId);
+      if (!item || !scene) return null;
+      const copy = this.cloneSource(item.sourceId, scene.name);
+      if (!copy) return null;
+      item.sourceId = copy.id;
+      this.save();
+      MS.emit('sources:changed');
+      MS.emit('items:changed');
+      return copy;
+    },
+
+    /** L'élément utilise désormais une source existante (partagée) ; l'ancienne disparaît si plus rien ne l'utilise. */
+    linkItem(sceneId, itemId, sourceId) {
+      const item = this.item(sceneId, itemId);
+      if (!item || !this.source(sourceId) || item.sourceId === sourceId) return;
+      const old = this.source(item.sourceId);
+      item.sourceId = sourceId;
+      if (old && !old.global && !this.isSourceUsed(old.id)) delete this.data.sources[old.id];
       this.save();
       MS.emit('sources:changed');
       MS.emit('items:changed');

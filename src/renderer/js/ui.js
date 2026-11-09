@@ -119,8 +119,8 @@
       store().removeItem(store().editScene().id, item.id);
     },
 
-    duplicateScene(id) {
-      const copy = store().duplicateScene(id);
+    duplicateScene(id, independent) {
+      const copy = store().duplicateScene(id, independent);
       if (copy) this.activateScene(copy.id);
     },
 
@@ -154,7 +154,8 @@
                   [
                     { label: 'Renommer…', action: () => rename(s) },
                     { label: 'Passer à l’antenne', action: () => MS.compositor.switchScene(s.id) },
-                    { label: 'Dupliquer', action: () => this.duplicateScene(s.id) },
+                    { label: 'Dupliquer (sources partagées)', action: () => this.duplicateScene(s.id) },
+                    { label: 'Dupliquer avec des sources indépendantes', action: () => this.duplicateScene(s.id, true) },
                     { label: `Transition vers cette scène… (${s.transition ? MS.TRANSITION_LABELS[s.transition.type] : 'par défaut'})`, action: () => MS.openTransitionOptions(s.id) },
                     { label: 'Supprimer', action: () => MS.$('[data-act="scene-remove"]').click() },
                   ],
@@ -186,6 +187,7 @@
           if (!src) return null;
           const type = MS.SourceTypes[src.type] || {};
           const rt = MS.runtimes.get(src.id);
+          const others = store().scenesUsing(src.id).filter((s) => s.id !== scene.id);
           const toggle = (key, on, off, title) =>
             el(
               'button',
@@ -212,7 +214,12 @@
               },
             },
             el('span', { class: 'glyph', text: type.glyph || '•' }),
-            el('span', { class: 'name', text: src.name, title: rt && rt.status ? `${src.name} · ${rt.status}` : src.name }, rt && rt.status ? el('small', { class: 'src-status', text: rt.status }) : null),
+            el(
+              'span',
+              { class: 'name', text: src.name, title: rt && rt.status ? `${src.name} · ${rt.status}` : src.name },
+              others.length ? el('span', { class: 'src-shared', text: '🔗', title: `Source partagée : la modifier la modifie aussi dans ${others.map((s) => `« ${s.name} »`).join(', ')}.\nClic droit > « Rendre indépendante » pour la régler à part.` }) : null,
+              rt && rt.status ? el('small', { class: 'src-status', text: rt.status }) : null
+            ),
             rt && rt.error ? el('span', { class: 'warn', title: rt.error }, MS.icon('warning')) : null,
             toggle('visible', 'eye', 'eyeOff', 'Afficher / masquer'),
             el(
@@ -269,6 +276,7 @@
           { label: 'Propriétés…', action: () => MS.openProperties(item.sourceId) },
           { label: 'Filtres…', action: () => MS.openFilters(item.sourceId) },
           { label: 'Renommer…', action: () => this.renameSource(item.sourceId) },
+          ...this.sharingEntries(item, sceneId),
           { separator: true },
           { label: "Ajuster à l'écran", action: () => MS.preview.transform(item, 'fit') },
           { label: "Étirer à l'écran", action: () => MS.preview.transform(item, 'stretch') },
@@ -285,6 +293,56 @@
         x,
         y
       );
+    },
+
+    /** Partage d'une source entre scènes : rendre indépendante, ou utiliser une source existante. */
+    sharingEntries(item, sceneId) {
+      const src = store().source(item.sourceId);
+      if (!src) return [];
+      const others = store().scenesUsing(src.id).filter((s) => s.id !== sceneId);
+      const entries = [{ separator: true }];
+      if (others.length) {
+        entries.push({ label: `🔗 Partagée avec ${others.map((s) => `« ${s.name} »`).join(', ')}`, disabled: true });
+        entries.push({ label: 'Rendre indépendante dans cette scène', action: () => this.unlinkItem(item, sceneId) });
+      }
+      const candidates = Object.values(store().data.sources).filter((s) => s.id !== src.id && s.type === src.type && !s.global);
+      if (candidates.length) entries.push({ label: 'Utiliser une source existante…', action: () => this.linkItemDialog(item, sceneId, candidates) });
+      return entries.length > 1 ? entries : [];
+    },
+
+    unlinkItem(item, sceneId) {
+      const copy = store().unlinkItem(sceneId, item.id);
+      if (copy) MS.toast(`« ${copy.name} » est maintenant propre à cette scène : ses réglages n'affectent plus les autres scènes.`, 'success', 5000);
+    },
+
+    async linkItemDialog(item, sceneId, candidates) {
+      const src = store().source(item.sourceId);
+      const sameDevice = (s) => (s.settings.deviceId && s.settings.deviceId === src.settings.deviceId) || (s.settings.captureName && s.settings.captureName === src.settings.captureName);
+      const select = el(
+        'select',
+        { class: 'input' },
+        candidates.map((s) => {
+          const where = store().scenesUsing(s.id).map((x) => x.name);
+          return el('option', { value: s.id, text: `${s.name}${where.length ? ` — dans ${where.join(', ')}` : ''}${sameDevice(s) ? ' (même appareil)' : ''}` });
+        })
+      );
+      const best = candidates.find(sameDevice);
+      if (best) select.value = best.id;
+      const ok = await MS.modal({
+        title: 'Utiliser une source existante',
+        width: 480,
+        content: el(
+          'div',
+          {},
+          el('p', { text: `« ${src.name} » sera remplacée dans cette scène par la source choisie, partagée avec les autres scènes : une seule capture tourne, et ses réglages s'appliquent partout. La position et la taille dans cette scène sont conservées.` }),
+          el('label', { class: 'field' }, el('span', { text: 'Source' }), select)
+        ),
+        buttons: [
+          { label: 'Annuler', value: false },
+          { label: 'Partager', value: true, primary: true },
+        ],
+      });
+      if (ok) store().linkItem(sceneId, item.id, select.value);
     },
 
     async renameSource(id) {
@@ -617,7 +675,8 @@
           { label: 'Rétablir', shortcut: 'Ctrl+Y', action: () => MS.history.redo() },
           { separator: true },
           { label: 'Modifier la transformation…', shortcut: 'Ctrl+E', disabled: !MS.preview.selectedItem(), action: () => MS.openTransform(MS.preview.selectedItem()) },
-          { label: 'Dupliquer la scène', action: () => this.duplicateScene(store().editScene().id) },
+          { label: 'Dupliquer la scène (sources partagées)', action: () => this.duplicateScene(store().editScene().id) },
+          { label: 'Dupliquer la scène avec des sources indépendantes', action: () => this.duplicateScene(store().editScene().id, true) },
         ],
         view: [
           { label: check(ui.studio, 'Mode studio'), action: () => store().setStudio(!ui.studio) },

@@ -1404,6 +1404,13 @@ table.history tbody tr:hover {
   color: var(--accent);
 }
 
+/* Source partagée entre plusieurs scènes */
+.src-shared {
+  margin-left: 6px;
+  font-size: 11px;
+  cursor: help;
+}
+
 /* État d'une source (ex. jeu capturé) dans la liste des sources */
 .src-status {
   margin-left: 6px;
