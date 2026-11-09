@@ -251,6 +251,34 @@ function renderClock(fps, onTick) {
   return true;
 }
 
+/**
+ * Charge du processeur (totale et par processus) et de la carte graphique
+ * pendant 1 s, pour le diagnostic. targets : [{ pid, type }].
+ */
+function usage(targets) {
+  return new Promise((resolve) => {
+    if (!available() || !targets.length) return resolve(null);
+    execFile(helperPath(), [`usage:${targets.map((t) => t.pid).join(',')}`], { windowsHide: true, timeout: 5000 }, (err, out) => {
+      if (err && !out) return resolve(null);
+      const byPid = new Map(targets.map((t) => [t.pid, t.type]));
+      const res = { cpu: null, gpu: {}, processes: [] };
+      for (const line of String(out).split(/\r?\n/)) {
+        let m = /^system cpu=([\d.]+)/.exec(line);
+        if (m) res.cpu = Number(m[1]);
+        m = /^(\d+) cpu=(-?[\d.]+)/.exec(line);
+        if (m) res.processes.push({ type: byPid.get(Number(m[1])) || m[1], cpu: Number(m[2]) });
+        m = /^gpu (\S+) ([\d.]+)(.*)$/.exec(line);
+        if (m) {
+          const per = {};
+          for (const [, pid, v] of m[3].matchAll(/(\d+)=([\d.]+)/g)) per[byPid.get(Number(pid)) || pid] = Number(v);
+          res.gpu[m[1]] = { total: Number(m[2]), ...per };
+        }
+      }
+      resolve(res);
+    });
+  });
+}
+
 function stopAll() {
   for (const id of [...captures.keys()]) stop(id);
   gameWatch.users.clear();
@@ -258,4 +286,4 @@ function stopAll() {
   renderClock(0);
 }
 
-module.exports = { start, stop, stopAll, available, renderClock, listApps, watchGames, currentGame: () => gameWatch.current, raisePriority, gpuPriority, priority: () => priority };
+module.exports = { start, stop, stopAll, available, renderClock, usage, listApps, watchGames, currentGame: () => gameWatch.current, raisePriority, gpuPriority, priority: () => priority };

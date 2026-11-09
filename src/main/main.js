@@ -11,6 +11,7 @@ const encoders = require('./encoders');
 const updater = require('./updater');
 const logger = require('./logger');
 const windowAudio = require('./windowAudio');
+const gpuCapture = require('./gpuCapture');
 const kickChat = require('./kickChat');
 const remote = require('./remote');
 
@@ -481,6 +482,9 @@ ipcMain.handle('twitch:badges', async (_e, channel) => {
 
 // Horloge de rendu précise, demandée par l'interface avec la cadence du canevas.
 ipcMain.handle('render:clock', (_e, fps) => windowAudio.renderClock(Number(fps) || 0, () => send('render:tick')));
+gpuCapture.setTarget(() => (win && !win.isDestroyed() ? win.webContents : null));
+ipcMain.on('gpucap:start', (_e, id, opts) => gpuCapture.start(id, opts, send));
+ipcMain.on('gpucap:stop', (_e, id) => gpuCapture.stop(id));
 browserSources.setGpuTarget(() => (win && !win.isDestroyed() ? win.webContents : null));
 ipcMain.on('browser:create', (_e, id, opts) => browserSources.create(id, opts, send));
 ipcMain.on('browser:destroy', (_e, id) => browserSources.destroy(id));
@@ -554,6 +558,7 @@ ipcMain.handle('app:info', () => ({
   version: app.getVersion(),
   defaultBrowserCss: browserSources.DEFAULT_CSS,
   windowAudio: windowAudio.available(),
+  gpuCapture: gpuCapture.available(),
   platform: process.platform,
   ffmpeg: Boolean(FFMPEG),
   videosPath: app.getPath('videos'),
@@ -575,7 +580,19 @@ ipcMain.handle('app:diagnostic', async () => ({
   processes: app.getAppMetrics().map((m) => ({ type: m.type, cpu: Math.round(m.cpu.percentCPUUsage * 10) / 10, memMB: Math.round((m.memory ? m.memory.workingSetSize : 0) / 1024) })),
   cpus: os.cpus().length,
   cpuModel: (os.cpus()[0] || {}).model,
+  // Charge mesurée pendant 1 s : processeur et carte graphique (3D, encodage vidéo…), jeu compris.
+  load: await windowAudio.usage(loadTargets()),
 }));
+
+function loadTargets() {
+  const t = [{ pid: process.pid, type: 'MyStream' }];
+  if (win && !win.isDestroyed()) t.push({ pid: win.webContents.getOSProcessId(), type: 'Interface' });
+  for (const m of app.getAppMetrics()) if (m.type === 'GPU') t.push({ pid: m.pid, type: 'GPU MyStream' });
+  for (const o of outputs.values()) if (o.proc && o.proc.pid) t.push({ pid: o.proc.pid, type: `FFmpeg ${o.kind}` });
+  const game = windowAudio.currentGame();
+  if (game && game.pid) t.push({ pid: game.pid, type: `Jeu ${game.exe}` });
+  return t;
+}
 
 function isAdmin() {
   return new Promise((resolve) => require('child_process').execFile('net', ['session'], { windowsHide: true }, (err) => resolve(!err)));
@@ -637,6 +654,7 @@ function createWindow() {
     win = null;
     browserSources.destroyAll();
     windowAudio.stopAll();
+    gpuCapture.stopAll();
     kickChat.stop();
     restreamChat.stop();
   });

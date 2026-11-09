@@ -56,7 +56,16 @@ jobs:
           for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set VSDIR=%%i
           call "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat"
           if not exist native\bin mkdir native\bin
-          cl /nologo /O2 /EHsc /W3 /MT native\window-audio.cpp ole32.lib user32.lib advapi32.lib /Fo:native\bin\ /Fe:native\bin\window-audio.exe
+          cl /nologo /O2 /EHsc /W3 /MT native\window-audio.cpp ole32.lib user32.lib advapi32.lib pdh.lib /Fo:native\bin\ /Fe:native\bin\window-audio.exe
+      - name: Compiler gpu-capture.exe (capture GPU, facultatif)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set VSDIR=%%i
+          call "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat"
+          cl /nologo /O2 /EHsc /W3 /MT /std:c++17 /permissive- native\gpu-capture.cpp /Fo:native\bin\ /Fe:native\bin\gpu-capture.exe
+          if exist native\bin\gpu-capture.obj del native\bin\gpu-capture.obj
       - run: npm pkg set version=${{ needs.version.outputs.version }}
       - run: npx electron-builder --publish never
       - uses: actions/upload-artifact@v4

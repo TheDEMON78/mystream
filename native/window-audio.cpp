@@ -22,6 +22,7 @@
 #include <audioclient.h>
 #include <audiopolicy.h>
 #include <tlhelp32.h>
+#include <pdh.h>
 #include <fcntl.h>
 #include <io.h>
 #include <stdio.h>
@@ -519,6 +520,101 @@ static int listApps() {
   return 0;
 }
 
+// --- Mesure de charge (diagnostic) -------------------------------------------
+
+// Mesure pendant 1 s la charge du processeur (totale et par processus) et de
+// la carte graphique (3D et encodage vidéo, par moteur, comme le Gestionnaire
+// des tâches). Affiche :
+//   system cpu=<%>
+//   gpu <type> <%> [pid=<%>,...]      (un par type de moteur : 3D, VideoEncode…)
+//   <pid> cpu=<%>
+static ULONGLONG ft(const FILETIME &f) { return (static_cast<ULONGLONG>(f.dwHighDateTime) << 32) | f.dwLowDateTime; }
+
+static int measureUsage(const wchar_t *list) {
+  DWORD pids[32];
+  HANDLE procs[32];
+  ULONGLONG before[32];
+  int n = 0;
+  for (const wchar_t *p = list; *p && n < 32;) {
+    wchar_t *end;
+    DWORD pid = wcstoul(p, &end, 10);
+    if (end == p) break;
+    p = *end == L',' ? end + 1 : end;
+    pids[n] = pid;
+    procs[n] = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    n++;
+  }
+  auto procTime = [](HANDLE h) -> ULONGLONG {
+    FILETIME c, e, k, u;
+    return h && GetProcessTimes(h, &c, &e, &k, &u) ? ft(k) + ft(u) : 0;
+  };
+  FILETIME idle0, kern0, user0, idle1, kern1, user1;
+  GetSystemTimes(&idle0, &kern0, &user0);
+  for (int i = 0; i < n; i++) before[i] = procTime(procs[i]);
+  PDH_HQUERY q = nullptr;
+  PDH_HCOUNTER gpu = nullptr;
+  if (PdhOpenQueryW(nullptr, 0, &q) == ERROR_SUCCESS && PdhAddEnglishCounterW(q, L"\\GPU Engine(*)\\Utilization Percentage", 0, &gpu) == ERROR_SUCCESS) PdhCollectQueryData(q);
+  Sleep(1000);
+  GetSystemTimes(&idle1, &kern1, &user1);
+  const ULONGLONG total = (ft(kern1) - ft(kern0)) + (ft(user1) - ft(user0));  // le noyau inclut l'inactivité
+  const ULONGLONG busy = total - (ft(idle1) - ft(idle0));
+  printf("system cpu=%.1f\n", total ? 100.0 * busy / total : 0.0);
+  for (int i = 0; i < n; i++) {
+    ULONGLONG d = procTime(procs[i]) - before[i];
+    printf("%lu cpu=%.1f\n", pids[i], procs[i] && total ? 100.0 * d / total : -1.0);
+  }
+  if (gpu && PdhCollectQueryData(q) == ERROR_SUCCESS) {
+    DWORD size = 0, count = 0;
+    PdhGetFormattedCounterArrayW(gpu, PDH_FMT_DOUBLE, &size, &count, nullptr);
+    PDH_FMT_COUNTERVALUE_ITEM_W *items = size ? static_cast<PDH_FMT_COUNTERVALUE_ITEM_W *>(malloc(size)) : nullptr;
+    if (items && PdhGetFormattedCounterArrayW(gpu, PDH_FMT_DOUBLE, &size, &count, items) == ERROR_SUCCESS) {
+      // Somme par moteur (luid + numéro + type), puis maximum par type, comme le Gestionnaire des tâches.
+      struct Engine { wchar_t key[96]; wchar_t type[32]; double sum; double byPid[32]; };
+      Engine *eng = static_cast<Engine *>(calloc(count ? count : 1, sizeof(Engine)));
+      int ne = 0;
+      for (DWORD i = 0; i < count; i++) {
+        const wchar_t *name = items[i].szName;  // pid_1234_luid_0x..._0x..._phys_0_eng_3_engtype_3D
+        const wchar_t *luid = wcsstr(name, L"_luid_");
+        const wchar_t *type = wcsstr(name, L"_engtype_");
+        if (!luid || !type || items[i].FmtValue.CStatus != ERROR_SUCCESS) continue;
+        wchar_t key[96];
+        size_t len = static_cast<size_t>(type - luid);
+        if (len >= 96) len = 95;
+        wcsncpy(key, luid, len);
+        key[len] = 0;
+        int j = 0;
+        while (j < ne && wcscmp(eng[j].key, key) != 0) j++;
+        if (j == ne) {
+          wcscpy(eng[j].key, key);
+          wcsncpy(eng[j].type, type + 9, 31);
+          ne++;
+        }
+        const double v = items[i].FmtValue.doubleValue;
+        eng[j].sum += v;
+        DWORD pid = wcstoul(name + 4, nullptr, 10);
+        for (int k = 0; k < n; k++) if (pids[k] == pid) eng[j].byPid[k] += v;
+      }
+      for (int j = 0; j < ne; j++) {
+        bool first = true;
+        for (int k = 0; k < j; k++) if (wcscmp(eng[k].type, eng[j].type) == 0) first = false;
+        if (!first) continue;
+        // Moteur le plus chargé de ce type.
+        int best = j;
+        for (int k = j + 1; k < ne; k++) if (wcscmp(eng[k].type, eng[j].type) == 0 && eng[k].sum > eng[best].sum) best = k;
+        printf("gpu %ls %.1f", eng[best].type, eng[best].sum > 100 ? 100.0 : eng[best].sum);
+        for (int k = 0; k < n; k++) if (eng[best].byPid[k] >= 0.5) printf(" %lu=%.1f", pids[k], eng[best].byPid[k]);
+        printf("\n");
+      }
+      free(eng);
+    }
+    free(items);
+  }
+  if (q) PdhCloseQuery(q);
+  for (int i = 0; i < n; i++) if (procs[i]) CloseHandle(procs[i]);
+  fflush(stdout);
+  return 0;
+}
+
 // --- Horloge de rendu ------------------------------------------------------
 
 // Les minuteurs du navigateur sous Windows partent par pas de 15,6 ms quand
@@ -576,6 +672,7 @@ int wmain(int argc, wchar_t **argv) {
   const wchar_t *arg = argv[1];
   if (wcsncmp(arg, L"games:", 6) == 0) return watchGames(wcstoul(arg + 6, nullptr, 10));
   if (wcsncmp(arg, L"prio:", 5) == 0) return raisePriority(arg + 5);
+  if (wcsncmp(arg, L"usage:", 6) == 0) return measureUsage(arg + 6);
   if (wcsncmp(arg, L"clock:", 6) == 0) return renderClock(wcstod(arg + 6, nullptr));
   if (wcscmp(arg, L"apps") == 0) return listApps();
   if (wcsncmp(arg, L"exe:", 4) == 0) {

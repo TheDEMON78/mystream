@@ -73,6 +73,7 @@
       this.interval = 0; // intervalle moyen entre deux images (ms)
       this.last = 0;
       this.first = new Promise((resolve) => (this.onFirst = resolve));
+      if (!track) return;
       if (typeof MediaStreamTrackProcessor === 'function') this.pump(track);
       else this.fallback(track);
     }
@@ -146,12 +147,54 @@
     close() {
       this.closed = true;
       if (this.reader) this.reader.cancel().catch(() => {});
+      if (this.onFirst) this.onFirst();
       if (this.frame) this.frame.close();
       this.frame = null;
       if (this.video) this.video.srcObject = null;
     }
   }
   MS.FrameFeed = FrameFeed;
+
+  /**
+   * Capture sur la carte graphique (gpu-capture.exe, Windows Graphics
+   * Capture comme OBS) : chaque image arrive en texture GPU partagée et
+   * reste sur la carte graphique jusqu'à l'écran et au stream. Le moteur de
+   * capture du navigateur, lui, recopie chaque image vers le processeur et
+   * la reconvertit, ce qui le limitait à 20 i/s pendant un jeu.
+   */
+  const gpuFeeds = new Map(); // id de source -> GpuFeed
+  class GpuFeed extends FrameFeed {
+    constructor(rt, opts) {
+      super(rt, null);
+      this.gpu = true;
+      const old = gpuFeeds.get(rt.src.id);
+      if (old && old !== this) old.close();
+      gpuFeeds.set(rt.src.id, this);
+      window.api.gpuCaptureStart(rt.src.id, opts);
+    }
+    push(frame) {
+      if (this.closed) return frame.close();
+      if (this.frame) this.frame.close();
+      this.frame = frame;
+      this.tick();
+    }
+    onState(s) {
+      if (this.closed || s.state !== 'error') return;
+      this.failed = true;
+      this.error = s.error || 'Capture GPU interrompue';
+      if (this.onFirst) {
+        this.onFirst();
+        this.onFirst = null;
+      }
+      if (this.onFail) this.onFail(this.error);
+    }
+    close() {
+      if (!this.closed) window.api.gpuCaptureStop(this.rt.src.id);
+      if (gpuFeeds.get(this.rt.src.id) === this) gpuFeeds.delete(this.rt.src.id);
+      super.close();
+    }
+  }
+  MS.GpuFeed = GpuFeed;
 
   class StreamRuntime extends BaseRuntime {
     async start() {
@@ -434,8 +477,28 @@
       MS.emit('runtime:ready', this);
       if (g && !this.suspended) this.startVideo(g);
     }
+    /** Capture sur la carte graphique, sauf si elle a échoué ou si elle est désactivée. */
+    useGpu() {
+      return Boolean(MS.appInfo.gpuCapture && MS.store.settings.ui.gpuCapture !== false && !this.gpuOff);
+    }
     async startVideo(g) {
       const token = (this.token = (this.token || 0) + 1);
+      if (this.useGpu()) {
+        const mode = this.src.settings.captureMode === 'window' ? 'window' : 'monitor';
+        const feed = new GpuFeed(this, { hwnd: g.id.split(':')[1], mode, fps: MS.store.settings.video.fps });
+        this.feed = feed;
+        this.captured = mode === 'monitor' ? g.screenId : g.id;
+        await feed.ready();
+        if (token !== this.token || this.disposed) return;
+        if (feed.frame && !feed.failed) {
+          this.error = null;
+          this.gpuError = null;
+          feed.onFail = (err) => this.gpuFallback(feed, err, g);
+          MS.emit('runtime:ready', this);
+          return;
+        }
+        return this.gpuFallback(feed, feed.error || 'aucune image reçue en 3 s', g);
+      }
       const { width, height, fps } = MS.store.settings.video;
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
@@ -453,6 +516,16 @@
       } catch (e) {
         if (token === this.token) this.fail(new Error(`Capture de « ${g.title || g.exe} » impossible : ${e.message}`));
       }
+    }
+    /** Échec de la capture GPU : retour à la capture du navigateur pour cette source. */
+    gpuFallback(feed, err, g) {
+      if (this.feed !== feed) return;
+      console.warn(`Capture GPU de « ${this.src.name} » indisponible :`, err);
+      feed.close();
+      this.feed = null;
+      this.gpuError = err;
+      this.gpuOff = true;
+      if (this.game === g && !this.suspended && !this.disposed) this.startVideo(g);
     }
     stopVideo() {
       if (this.feed) this.feed.close();
@@ -1038,6 +1111,10 @@
   }
 
   window.api.onBrowserTexture((id, frame) => {
+    if (id.startsWith('cap:')) {
+      const feed = gpuFeeds.get(id.slice(4));
+      return feed ? feed.push(frame) : frame.close();
+    }
     const rt = MS.runtimes.get(id);
     if (rt && rt.onTexture) rt.onTexture(frame);
     else frame.close();
@@ -1050,6 +1127,10 @@
       // Toujours accuser réception : l'image suivante n'est envoyée qu'après.
       window.api.browserAck(f.id);
     }
+  });
+  window.api.onGpuCaptureState((s) => {
+    const feed = gpuFeeds.get(s.id);
+    if (feed) feed.onState(s);
   });
   window.api.onGameChanged((g) => MS.emit('game:changed', g));
   window.api.onGameForeground((fg) => MS.emit('game:foreground', fg));

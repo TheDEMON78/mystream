@@ -14,7 +14,7 @@ const exe = path.join(out, 'window-audio.exe');
 
 const cmd =
   process.platform === 'win32'
-    ? `cl /nologo /O2 /EHsc /W3 /MT "${src}" ole32.lib user32.lib advapi32.lib /Fo:"${out}\\\\" /Fe:"${exe}"`
-    : `x86_64-w64-mingw32-g++ -O2 -municode -static -Wall -o "${exe}" "${src}" -lole32 -ladvapi32`;
+    ? `cl /nologo /O2 /EHsc /W3 /MT "${src}" ole32.lib user32.lib advapi32.lib pdh.lib /Fo:"${out}\\\\" /Fe:"${exe}"`
+    : `x86_64-w64-mingw32-g++ -O2 -municode -static -Wall -o "${exe}" "${src}" -lole32 -ladvapi32 -lpdh`;
 execSync(cmd, { stdio: 'inherit' });
 console.log(`Compilé : ${exe}`);
