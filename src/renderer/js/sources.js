@@ -45,6 +45,98 @@
     }
   }
 
+  /**
+   * Images d'une capture vidéo (écran, fenêtre, jeu, caméra), lues
+   * directement à la sortie du capteur : chaque image est utilisable dès
+   * qu'elle est capturée, sans le tampon d'un lecteur <video> calé sur
+   * l'affichage, et le compositeur est prévenu pour composer aussitôt.
+   */
+  class FrameFeed {
+    constructor(rt, track) {
+      this.rt = rt;
+      this.interval = 0; // intervalle moyen entre deux images (ms)
+      this.last = 0;
+      this.first = new Promise((resolve) => (this.onFirst = resolve));
+      if (typeof MediaStreamTrackProcessor === 'function') this.pump(track);
+      else this.fallback(track);
+    }
+    async pump(track) {
+      let reader;
+      try {
+        // Tampon d'une image : si l'interface prend du retard, on saute à la plus récente.
+        reader = new MediaStreamTrackProcessor({ track, maxBufferSize: 1 }).readable.getReader();
+      } catch {
+        return this.fallback(track);
+      }
+      this.reader = reader;
+      for (;;) {
+        let r;
+        try {
+          r = await reader.read();
+        } catch {
+          break;
+        }
+        if (r.done) break;
+        if (this.closed) {
+          r.value.close();
+          break;
+        }
+        if (this.frame) this.frame.close();
+        this.frame = r.value;
+        this.tick();
+      }
+    }
+    /** Ancien moteur sans lecture directe : lecteur <video> et rappel à chaque image. */
+    fallback(track) {
+      const v = document.createElement('video');
+      v.muted = true;
+      v.playsInline = true;
+      v.srcObject = new MediaStream([track]);
+      v.play().catch(() => {});
+      this.video = v;
+      const step = () => {
+        if (this.closed) return;
+        this.tick();
+        v.requestVideoFrameCallback(step);
+      };
+      if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(step);
+      else v.addEventListener('loadeddata', () => this.onFirst(), { once: true });
+    }
+    tick() {
+      const now = performance.now();
+      const dt = now - this.last;
+      if (this.last && dt < 250) this.interval = this.interval ? this.interval * 0.9 + dt * 0.1 : dt;
+      this.last = now;
+      if (this.onFirst) {
+        this.onFirst();
+        this.onFirst = null;
+      }
+      MS.compositor.sourceFrame(this.rt, now);
+    }
+    /** Attend la première image (dimensions connues), 3 s au plus. */
+    ready() {
+      return Promise.race([this.first, new Promise((r) => setTimeout(r, 3000))]);
+    }
+    get width() {
+      return this.frame ? this.frame.displayWidth : this.video ? this.video.videoWidth : 0;
+    }
+    get height() {
+      return this.frame ? this.frame.displayHeight : this.video ? this.video.videoHeight : 0;
+    }
+    image() {
+      if (this.frame) return this.frame;
+      return this.video && this.video.readyState >= 2 ? this.video : null;
+    }
+    close() {
+      this.closed = true;
+      if (this.reader) this.reader.cancel().catch(() => {});
+      if (this.frame) this.frame.close();
+      this.frame = null;
+      if (this.video) this.video.srcObject = null;
+    }
+  }
+  MS.FrameFeed = FrameFeed;
+
   class StreamRuntime extends BaseRuntime {
     async start() {
       try {
@@ -56,13 +148,10 @@
         this.stream = stream;
         const track = stream.getVideoTracks()[0] || stream.getAudioTracks()[0];
         if (track) track.addEventListener('ended', () => this.fail(new Error('Capture interrompue')));
-        if (stream.getVideoTracks().length) {
-          const v = document.createElement('video');
-          v.muted = true;
-          v.playsInline = true;
-          v.srcObject = stream;
-          await v.play().catch(() => {});
-          this.video = v;
+        const vt = stream.getVideoTracks()[0];
+        if (vt) {
+          this.feed = new FrameFeed(this, vt);
+          await this.feed.ready();
         }
         this.markReady();
       } catch (e) {
@@ -70,13 +159,13 @@
       }
     }
     get width() {
-      return this.video ? this.video.videoWidth : 0;
+      return this.feed ? this.feed.width : 0;
     }
     get height() {
-      return this.video ? this.video.videoHeight : 0;
+      return this.feed ? this.feed.height : 0;
     }
     drawable() {
-      return this.video && this.video.readyState >= 2 ? this.video : null;
+      return this.feed ? this.feed.image() : null;
     }
     hasAudio() {
       return Boolean(this.stream && this.stream.getAudioTracks().length);
@@ -87,8 +176,8 @@
     }
     dispose() {
       super.dispose();
+      if (this.feed) this.feed.close();
       if (this.stream) this.stream.getTracks().forEach((t) => t.stop());
-      if (this.video) this.video.srcObject = null;
     }
   }
 
@@ -240,14 +329,14 @@
       this.setGame(await window.api.gameCurrent());
     }
     get width() {
-      return this.video ? this.video.videoWidth : 0;
+      return this.frozen ? this.frozen.width : this.feed ? this.feed.width : 0;
     }
     get height() {
-      return this.video ? this.video.videoHeight : 0;
+      return this.frozen ? this.frozen.height : this.feed ? this.feed.height : 0;
     }
     drawable() {
       if (this.frozen) return this.frozen;
-      return this.video && this.video.readyState >= 2 ? this.video : null;
+      return this.feed ? this.feed.image() : null;
     }
     /** Capture de l'écran du jeu (le plus fluide), ou de sa fenêtre si l'écran est introuvable ou si on le demande. */
     sourceOf(g) {
@@ -258,14 +347,15 @@
      * au lieu de montrer le bureau ou une autre application.
      */
     setForeground(fg) {
-      if (fg || !this.video || this.captured !== this.game.screenId || this.video.readyState < 2) {
+      const img = this.feed && this.feed.image();
+      if (fg || !img || !this.game || this.captured !== this.game.screenId) {
         this.frozen = null;
         return;
       }
       const c = document.createElement('canvas');
-      c.width = this.video.videoWidth;
-      c.height = this.video.videoHeight;
-      c.getContext('2d').drawImage(this.video, 0, 0);
+      c.width = this.feed.width;
+      c.height = this.feed.height;
+      c.getContext('2d').drawImage(img, 0, 0);
       this.frozen = c;
     }
     /** Nom du jeu capturé (affiché dans la liste des sources). */
@@ -290,13 +380,10 @@
         });
         if (token !== this.token || this.disposed) return stream.getTracks().forEach((t) => t.stop());
         this.captured = this.sourceOf(g);
-        const v = document.createElement('video');
-        v.muted = true;
-        v.playsInline = true;
-        v.srcObject = stream;
-        await v.play().catch(() => {});
         this.stream = stream;
-        this.video = v;
+        this.feed = new FrameFeed(this, stream.getVideoTracks()[0]);
+        await this.feed.ready();
+        if (token !== this.token || this.disposed) return;
         this.error = null;
         MS.emit('runtime:ready', this);
       } catch (e) {
@@ -304,10 +391,10 @@
       }
     }
     stopVideo() {
+      if (this.feed) this.feed.close();
       if (this.stream) this.stream.getTracks().forEach((t) => t.stop());
-      if (this.video) this.video.srcObject = null;
       this.stream = null;
-      this.video = null;
+      this.feed = null;
     }
     hasAudio() {
       return Boolean(this.src.settings.captureAudio && MS.appInfo.windowAudio);

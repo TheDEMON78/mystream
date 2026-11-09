@@ -694,7 +694,8 @@
         platform: MS.appInfo.platform,
         video: st.video,
         stream: { service: st.stream.service, encoder: st.stream.encoder, used: MS.outputs.active.stream && MS.outputs.active.stream.encoder, videoBitrate: st.stream.videoBitrate, preset: st.stream.preset },
-        render: { fps: round(s.fps), renderMs: round(s.renderMs), sendMs: round(s.sendMs || 0), maxLateMs: round(s.maxLateMs), lagged: s.lagged, total: s.total, longTasks: s.longTasks, longTaskMs: Math.round(s.longTaskMs) },
+        render: { fps: round(s.fps), renderMs: round(s.renderMs), sendMs: round(s.sendMs || 0), maxLateMs: round(s.maxLateMs), lagged: s.lagged, total: s.total, longTasks: s.longTasks, longTaskMs: Math.round(s.longTaskMs), synced: s.synced || 0 },
+        capture: [...MS.runtimes.map.values()].filter((rt) => rt.feed).map((rt) => ({ type: rt.src.type, w: rt.width, h: rt.height, fps: rt.feed.interval ? round(1000 / rt.feed.interval) : 0, direct: Boolean(rt.feed.reader), clock: rt === MS.compositor.clock })),
         freezes: s.freezes,
         uptime: Math.round(performance.now() / 1000),
         encoder: out && out.progress,
@@ -830,6 +831,7 @@
         const s = MS.compositor.stats;
         const target = store().settings.video.fps;
         fps.textContent = `${s.fps.toFixed(1)} / ${target} i/s · rendu ${s.renderMs.toFixed(1)} ms · ${s.lagged} image${s.lagged > 1 ? 's' : ''} manquée${s.lagged > 1 ? 's' : ''}`;
+        fps.title = MS.compositor.clock ? `Rendu calé sur la capture « ${MS.compositor.clock.src.name} » : chaque image capturée est composée dès son arrivée.` : 'Rendu à cadence fixe.';
       }, 500);
     },
   };

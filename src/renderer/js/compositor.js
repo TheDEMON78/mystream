@@ -180,54 +180,83 @@
     },
 
     /**
-     * Cadence exacte : chaque image est planifiée à t0 + n × intervalle.
-     * setInterval arrondit l'intervalle à la milliseconde (16 ms au lieu de
-     * 16,67 ms), ce qui produisait 62,5 images/s au lieu de 60.
+     * Cadence exacte : chaque image est planifiée à t0 + n × intervalle
+     * (setInterval arrondirait 16,67 ms à 16 ms).
+     *
+     * Rendu calé sur la capture : quand la plus grande source visible est une
+     * capture (jeu, écran, caméra) qui fournit des images à la cadence du
+     * stream, chaque image est composée dès qu'elle arrive. Sans cela, deux
+     * horloges indépendantes (capture et rendu) dérivent l'une par rapport à
+     * l'autre : des images capturées sont dessinées deux fois, d'autres
+     * jamais, ce qui donne des saccades régulières et une image de retard. Le
+     * minuteur ne sert alors que de filet si l'image suivante tarde.
      */
     start(fps) {
       if (this.cancel) this.cancel();
       this.fps = fps;
       this.interval = 1000 / fps;
       this.next = performance.now();
-      this.window = { frames: 0, start: this.next, maxLate: 0 };
-      const tick = () => {
-        const now = performance.now();
-        const late = now - this.next;
+      this.clock = null;
+      this.window = { frames: 0, synced: 0, start: this.next, maxLate: 0 };
+      this.tick(true);
+    },
+
+    /** Nouvelle image d'une capture : composée tout de suite si elle sert d'horloge et qu'une image est due. */
+    sourceFrame(rt, t) {
+      if (rt !== this.clock || t < this.next - this.interval * 0.25) return;
+      this.tick(false);
+    },
+
+    tick(fromTimer) {
+      const now = performance.now();
+      if (fromTimer) {
+        const late = now - this.due;
         if (late > this.window.maxLate) this.window.maxLate = late;
-        if (late >= this.interval) {
-          // Images impossibles à rattraper : on les compte et on se recale.
-          const missed = Math.floor(late / this.interval);
-          this.stats.lagged += missed;
-          this.next += missed * this.interval;
-        }
-        try {
-          // Fenêtre réduite et aucune sortie active : personne ne voit l'image, on ne la calcule pas.
-          if (!document.hidden || MS.outputs.isAnyActive()) {
-            this.frame();
-            this.window.frames++;
-            const track = MS.outputs.videoTrack;
-            if (track && track.readyState === 'live') {
-              const t = performance.now();
-              track.requestFrame();
-              this.stats.sendMs = (this.stats.sendMs || 0) * 0.9 + (performance.now() - t) * 0.1;
-            }
+      }
+      const behind = now - this.next;
+      if (behind >= this.interval) {
+        // Images impossibles à rattraper : on les compte et on se recale.
+        const missed = Math.floor(behind / this.interval);
+        this.stats.lagged += missed;
+        this.next += missed * this.interval;
+      }
+      try {
+        // Fenêtre réduite et aucune sortie active : personne ne voit l'image, on ne la calcule pas.
+        if (!document.hidden || MS.outputs.isAnyActive()) {
+          this.frame();
+          this.window.frames++;
+          if (!fromTimer) this.window.synced++;
+          const track = MS.outputs.videoTrack;
+          if (track && track.readyState === 'live') {
+            const t = performance.now();
+            track.requestFrame();
+            this.stats.sendMs = (this.stats.sendMs || 0) * 0.9 + (performance.now() - t) * 0.1;
           }
-        } catch (e) {
-          // Une source défaillante ne doit jamais interrompre la boucle de rendu.
-          if (e.message !== this.lastError) console.error('Rendu :', e);
-          this.lastError = e.message;
         }
-        // Images réellement dessinées par seconde (les images manquées ne comptent pas).
-        const end = performance.now();
-        if (end - this.window.start >= 1000) {
-          this.stats.fps = (this.window.frames * 1000) / (end - this.window.start);
-          this.stats.maxLateMs = this.window.maxLate;
-          this.window = { frames: 0, start: end, maxLate: 0 };
-        }
-        this.next += this.interval;
-        this.cancel = schedule(tick, Math.max(0, this.next - performance.now()));
-      };
-      tick();
+      } catch (e) {
+        // Une source défaillante ne doit jamais interrompre la boucle de rendu.
+        if (e.message !== this.lastError) console.error('Rendu :', e);
+        this.lastError = e.message;
+      }
+      // Images réellement dessinées par seconde (les images manquées ne comptent pas).
+      const end = performance.now();
+      if (end - this.window.start >= 1000) {
+        this.stats.fps = (this.window.frames * 1000) / (end - this.window.start);
+        this.stats.maxLateMs = this.window.maxLate;
+        this.stats.synced = this.window.frames ? Math.round((this.window.synced * 100) / this.window.frames) : 0;
+        this.window = { frames: 0, synced: 0, start: end, maxLate: 0 };
+      }
+      this.next = fromTimer ? this.next + this.interval : now + this.interval;
+      if (this.cancel) this.cancel();
+      this.due = this.next + (this.clock ? this.interval * 0.5 : 0);
+      this.cancel = schedule(() => this.tick(true), Math.max(0, this.due - performance.now()));
+    },
+
+    /** Choisit la capture qui sert d'horloge : la plus grande visible, si sa cadence suit celle du stream. */
+    pickClock(now) {
+      const c = this.pick.rt;
+      const f = c && c.feed;
+      this.clock = f && !f.closed && f.interval && f.interval <= this.interval / 0.85 && now - f.last < this.interval * 3 ? c : null;
     },
 
     /** Transition utilisée pour arriver sur une scène : la sienne, sinon celle du dock. */
@@ -389,6 +418,7 @@
         if (!d) continue;
         const r = this.itemRect(item);
         if (!r || r.w <= 0 || r.h <= 0 || r.x >= W || r.y >= H || r.x + r.w <= 0 || r.y + r.h <= 0) continue;
+        if (rt.feed && ctx === this.ctx && r.w * r.h > this.pick.area) this.pick = { rt, area: r.w * r.h };
         const f = MS.store.source(item.sourceId).filters;
         if (!f) {
           ctx.globalAlpha = alpha;
@@ -425,12 +455,14 @@
       ctx.fillStyle = '#000';
       ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
+      this.pick = { rt: null, area: 0 };
       const current = MS.store.currentScene();
       if (this.transition && !this.drawTransition(ctx, this.transition, current, t0)) {
         if (this.transition.gif) this.transition.gif.prepare();
         this.transition = null;
       }
       if (!this.transition) this.drawScene(ctx, current, 1);
+      this.pickClock(t0);
 
       // Mode studio : l'aperçu est rendu directement à la taille affichée.
       if (MS.store.settings.ui.studio && MS.preview.visible !== false && this.studioCanvas.width > 1) {
