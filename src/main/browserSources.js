@@ -59,6 +59,23 @@ function ack(id) {
   flush(id);
 }
 
+/**
+ * Source masquée ou hors de la scène : la page continue de tourner (son des
+ * alertes, scripts) mais n'est plus dessinée, ni convertie, ni transmise.
+ */
+function setPainting(id, on) {
+  const s = sources.get(id);
+  if (!s || s.win.isDestroyed()) return;
+  const wc = s.win.webContents;
+  if (on) {
+    wc.startPainting();
+    s.full = true;
+    wc.invalidate();
+  } else {
+    wc.stopPainting();
+  }
+}
+
 function destroy(id) {
   const s = sources.get(id);
   if (!s) return;
@@ -161,4 +178,4 @@ function destroyAll() {
   for (const id of [...sources.keys()]) destroy(id);
 }
 
-module.exports = { create, destroy, reload, destroyAll, ack, audioEnabled, audio, DEFAULT_CSS };
+module.exports = { create, destroy, setPainting, reload, destroyAll, ack, audioEnabled, audio, DEFAULT_CSS };

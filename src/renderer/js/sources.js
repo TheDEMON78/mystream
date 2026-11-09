@@ -11,6 +11,12 @@
       this.error = null;
       this.ready = false;
       this.disposed = false;
+      this.suspended = false;
+      this.seenAt = performance.now(); // dernière fois que la source était à l'écran
+    }
+    /** Peut être mise en veille quand elle n'est plus affichée (voir MS.runtimes.idle). */
+    canSuspend() {
+      return false;
     }
     get width() {
       return 0;
@@ -51,6 +57,16 @@
    * qu'elle est capturée, sans le tampon d'un lecteur <video> calé sur
    * l'affichage, et le compositeur est prévenu pour composer aussitôt.
    */
+  /** Copie fixe d'une image, affichée pendant la mise en veille et la reprise d'une capture. */
+  function still(img, w, h) {
+    if (!img || !w || !h) return null;
+    const c = document.createElement('canvas');
+    c.width = w;
+    c.height = h;
+    c.getContext('2d').drawImage(img, 0, 0, w, h);
+    return c;
+  }
+
   class FrameFeed {
     constructor(rt, track) {
       this.rt = rt;
@@ -159,13 +175,34 @@
       }
     }
     get width() {
-      return this.feed ? this.feed.width : 0;
+      return (this.feed && this.feed.width) || (this.still ? this.still.width : 0);
     }
     get height() {
-      return this.feed ? this.feed.height : 0;
+      return (this.feed && this.feed.height) || (this.still ? this.still.height : 0);
     }
     drawable() {
-      return this.feed ? this.feed.image() : null;
+      const img = this.feed && this.feed.image();
+      if (img) {
+        this.still = null;
+        return img;
+      }
+      return this.still || null;
+    }
+    /** Capture vidéo sans son (écran, fenêtre, caméra) : arrêtée quand on ne la voit pas. */
+    canSuspend() {
+      return Boolean(this.feed && this.stream && !this.stream.getAudioTracks().length);
+    }
+    suspend() {
+      this.still = still(this.feed.image(), this.feed.width, this.feed.height);
+      this.suspended = true;
+      this.feed.close();
+      this.feed = null;
+      this.stream.getTracks().forEach((t) => t.stop());
+      this.stream = null;
+    }
+    resume() {
+      this.suspended = false;
+      this.start();
     }
     hasAudio() {
       return Boolean(this.stream && this.stream.getAudioTracks().length);
@@ -329,14 +366,35 @@
       this.setGame(await window.api.gameCurrent());
     }
     get width() {
-      return this.frozen ? this.frozen.width : this.feed ? this.feed.width : 0;
+      const c = this.frozen || (this.feed && this.feed.width ? this.feed : this.still);
+      return c ? c.width : 0;
     }
     get height() {
-      return this.frozen ? this.frozen.height : this.feed ? this.feed.height : 0;
+      const c = this.frozen || (this.feed && this.feed.height ? this.feed : this.still);
+      return c ? c.height : 0;
     }
     drawable() {
       if (this.frozen) return this.frozen;
-      return this.feed ? this.feed.image() : null;
+      const img = this.feed && this.feed.image();
+      if (img) {
+        this.still = null;
+        return img;
+      }
+      return this.still || null;
+    }
+    /** Hors de la scène : la capture de l'image s'arrête, le son et la détection du jeu continuent. */
+    canSuspend() {
+      return Boolean(this.feed);
+    }
+    suspend() {
+      this.still = this.frozen || still(this.feed.image(), this.feed.width, this.feed.height);
+      this.suspended = true;
+      this.token = (this.token || 0) + 1;
+      this.stopVideo();
+    }
+    resume() {
+      this.suspended = false;
+      if (this.game) this.startVideo(this.game);
     }
     /** Capture de l'écran du jeu (le plus fluide), ou de sa fenêtre si l'écran est introuvable ou si on le demande. */
     sourceOf(g) {
@@ -367,11 +425,15 @@
       if (this.disposed || key(g) === key(this.game)) return;
       this.game = g || null;
       this.frozen = null;
-      const token = (this.token = (this.token || 0) + 1);
+      this.still = null;
+      this.token = (this.token || 0) + 1;
       this.stopVideo();
       this.syncAudio();
       MS.emit('runtime:ready', this);
-      if (!g) return;
+      if (g && !this.suspended) this.startVideo(g);
+    }
+    async startVideo(g) {
+      const token = (this.token = (this.token || 0) + 1);
       const { width, height, fps } = MS.store.settings.video;
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
@@ -935,6 +997,18 @@
     drawable() {
       return this.ready ? this.canvas : null;
     }
+    /** Hors de la scène : la page tourne toujours (son des alertes) mais n'est plus dessinée. */
+    canSuspend() {
+      return this.ready;
+    }
+    suspend() {
+      this.suspended = true;
+      window.api.browserPaint(this.src.id, false);
+    }
+    resume() {
+      this.suspended = false;
+      window.api.browserPaint(this.src.id, true);
+    }
     dispose() {
       super.dispose();
       window.api.browserDestroy(this.src.id);
@@ -1228,6 +1302,8 @@
 
   /* Gestionnaire des moteurs ------------------------------------------- */
 
+  const IDLE_AFTER = 3000; // ms sans être affichée avant la mise en veille
+
   MS.runtimes = {
     map: new Map(),
 
@@ -1264,6 +1340,26 @@
       rt.dispose();
     },
 
+    /**
+     * Comme « Désactiver quand la source n'est pas affichée » d'OBS, mais
+     * automatique : une capture vidéo ou une page web masquée, ou dans une
+     * scène qui n'est ni à l'antenne ni dans l'aperçu, est mise en veille
+     * après quelques secondes et ne consomme plus rien. Elle repart dès
+     * qu'elle réapparaît, en montrant sa dernière image le temps de reprendre.
+     */
+    idle() {
+      const now = performance.now();
+      for (const rt of this.map.values()) {
+        if (!rt.suspended && !rt.disposed && now - rt.seenAt > IDLE_AFTER && rt.canSuspend()) rt.suspend();
+      }
+    },
+
+    /** Appelé par le compositeur pour chaque source visible de la scène affichée. */
+    seen(rt, now) {
+      rt.seenAt = now;
+      if (rt.suspended && !rt.disposed) rt.resume();
+    },
+
     sync() {
       const sources = MS.store.data.sources;
       for (const id of [...this.map.keys()]) if (!sources[id]) this.dispose(id);
@@ -1272,4 +1368,5 @@
   };
 
   MS.on('sources:changed', () => MS.runtimes.sync());
+  setInterval(() => MS.runtimes.idle(), 1000);
 })();

@@ -37,6 +37,7 @@ contextBridge.exposeInMainWorld('api', {
   browserDestroy: (id) => ipcRenderer.send('browser:destroy', id),
   browserReload: (id) => ipcRenderer.send('browser:reload', id),
   browserAck: (id) => ipcRenderer.send('browser:ack', id),
+  browserPaint: (id, on) => ipcRenderer.send('browser:paint', id, on),
   onBrowserFrame: listen('browser:frame'),
   onBrowserError: listen('browser:error'),
   onBrowserAudio: listen('browser:audio'),

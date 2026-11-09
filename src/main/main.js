@@ -482,6 +482,7 @@ ipcMain.handle('twitch:badges', async (_e, channel) => {
 ipcMain.on('browser:create', (_e, id, opts) => browserSources.create(id, opts, send));
 ipcMain.on('browser:destroy', (_e, id) => browserSources.destroy(id));
 ipcMain.on('browser:reload', (_e, id) => browserSources.reload(id));
+ipcMain.on('browser:paint', (_e, id, on) => browserSources.setPainting(id, Boolean(on)));
 ipcMain.on('browser:ack', (_e, id) => browserSources.ack(id));
 ipcMain.on('browser:audio-enabled', (e) => {
   e.returnValue = browserSources.audioEnabled(e.sender.id);

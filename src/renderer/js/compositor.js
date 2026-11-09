@@ -407,6 +407,15 @@
       MS.emit('items:changed');
     },
 
+    markSeen(scene, now) {
+      if (!scene) return;
+      for (const item of scene.items) {
+        if (!item.visible) continue;
+        const rt = MS.runtimes.get(item.sourceId);
+        if (rt) MS.runtimes.seen(rt, now);
+      }
+    },
+
     drawScene(ctx, scene, alpha) {
       if (!scene) return;
       const { width: W, height: H } = MS.store.settings.video;
@@ -463,6 +472,11 @@
       }
       if (!this.transition) this.drawScene(ctx, current, 1);
       this.pickClock(t0);
+
+      // Sources à l'écran (antenne, scène de départ d'une transition, aperçu du mode studio) : gardées actives.
+      this.markSeen(current, t0);
+      if (this.transition) this.markSeen(MS.store.scene(this.transition.from), t0);
+      if (MS.store.settings.ui.studio) this.markSeen(MS.store.editScene(), t0);
 
       // Mode studio : l'aperçu est rendu directement à la taille affichée.
       if (MS.store.settings.ui.studio && MS.preview.visible !== false && this.studioCanvas.width > 1) {
