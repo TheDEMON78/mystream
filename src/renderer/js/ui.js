@@ -754,7 +754,7 @@
         platform: MS.appInfo.platform,
         video: st.video,
         stream: { service: st.stream.service, encoder: st.stream.encoder, used: (o.active.stream || o.last.stream || {}).encoder || null, videoBitrate: st.stream.videoBitrate, preset: st.stream.preset },
-        render: { fps: round(s.fps), renderMs: round(s.renderMs), sendMs: round(s.sendMs || 0), maxLateMs: round(s.maxLateMs), lagged: s.lagged, total: s.total, longTasks: s.longTasks, longTaskMs: Math.round(s.longTaskMs), synced: s.synced || 0, timerLateMs: round(s.timerLateMs || 0) },
+        render: { fps: round(s.fps), renderMs: round(s.renderMs), sendMs: round(s.sendMs || 0), maxLateMs: round(s.maxLateMs), lagged: s.lagged, total: s.total, longTasks: s.longTasks, longTaskMs: Math.round(s.longTaskMs), synced: s.synced || 0, clock: s.clockSource, timerLateMs: round(s.timerLateMs || 0) },
         capture: [...MS.runtimes.map.values()].filter((rt) => /capture/.test(rt.src.type)).map((rt) => ({ type: rt.src.type, w: rt.width, h: rt.height, paused: rt.suspended, err: rt.error || undefined, fps: rt.feed && rt.feed.interval ? round(1000 / rt.feed.interval) : 0, direct: Boolean(rt.feed && rt.feed.reader), clock: rt === MS.compositor.clock })),
         freezes: s.freezes,
         uptime: Math.round(performance.now() / 1000),

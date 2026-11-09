@@ -479,6 +479,8 @@ ipcMain.handle('twitch:badges', async (_e, channel) => {
   return map;
 });
 
+// Horloge de rendu précise, demandée par l'interface avec la cadence du canevas.
+ipcMain.handle('render:clock', (_e, fps) => windowAudio.renderClock(Number(fps) || 0, () => send('render:tick')));
 browserSources.setGpuTarget(() => (win && !win.isDestroyed() ? win.webContents : null));
 ipcMain.on('browser:create', (_e, id, opts) => browserSources.create(id, opts, send));
 ipcMain.on('browser:destroy', (_e, id) => browserSources.destroy(id));

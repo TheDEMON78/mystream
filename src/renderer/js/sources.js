@@ -319,7 +319,9 @@
       clearTimeout(this.retry);
       this.retry = setTimeout(() => {
         if (this.disposed) return;
-        MS.runtimes.refresh(this.src);
+        // Hors de la scène : la recherche (qui énumère toutes les fenêtres du PC) attend qu'elle réapparaisse.
+        if (performance.now() - this.seenAt > IDLE_AFTER) this.retryWhenSeen = true;
+        else MS.runtimes.refresh(this.src);
       }, RETRY_WINDOW);
     }
     async getStream() {
@@ -1382,6 +1384,11 @@
     /** Appelé par le compositeur pour chaque source visible de la scène affichée. */
     seen(rt, now) {
       rt.seenAt = now;
+      if (rt.retryWhenSeen && !rt.disposed) {
+        rt.retryWhenSeen = false;
+        this.refresh(rt.src);
+        return;
+      }
       if (rt.suspended && !rt.disposed) rt.resume();
     },
 

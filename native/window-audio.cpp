@@ -519,14 +519,64 @@ static int listApps() {
   return 0;
 }
 
+// --- Horloge de rendu ------------------------------------------------------
+
+// Les minuteurs du navigateur sous Windows partent par pas de 15,6 ms quand
+// MyStream n'est pas au premier plan (pendant qu'on joue) : une image prévue
+// toutes les 16,7 ms tombe alors irrégulièrement, d'où des saccades. Ce mode
+// écrit un octet sur stdout à chaque image, à l'instant exact, grâce à un
+// minuteur haute résolution (Windows 10 1803+, sinon timeBeginPeriod(1),
+// valable pour ce seul processus). S'arrête quand MyStream ferme le tube.
+#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
+#endif
+typedef UINT(WINAPI *TimePeriodFn)(UINT);
+
+static int renderClock(double fps) {
+  if (fps < 1 || fps > 240) return fail("Cadence invalide", E_INVALIDARG);
+  HANDLE timer = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+  if (!timer) {
+    HMODULE winmm = LoadLibraryW(L"winmm.dll");
+    TimePeriodFn begin = winmm ? reinterpret_cast<TimePeriodFn>(GetProcAddress(winmm, "timeBeginPeriod")) : nullptr;
+    if (begin) begin(1);
+    timer = CreateWaitableTimerW(nullptr, FALSE, nullptr);
+  }
+  if (!timer) return fail("Minuteur indisponible", HRESULT_FROM_WIN32(GetLastError()));
+  SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+  _setmode(_fileno(stdout), _O_BINARY);
+  LARGE_INTEGER freq, start, now;
+  QueryPerformanceFrequency(&freq);
+  QueryPerformanceCounter(&start);
+  const double period = static_cast<double>(freq.QuadPart) / fps;  // en unités du compteur
+  unsigned long long n = 0;
+  for (;;) {
+    n++;
+    QueryPerformanceCounter(&now);
+    double target = static_cast<double>(start.QuadPart) + n * period;
+    // En retard d'une image ou plus (PC en veille…) : on se recale sans rafale.
+    if (now.QuadPart > target + period) {
+      n = static_cast<unsigned long long>((now.QuadPart - start.QuadPart) / period) + 1;
+      target = static_cast<double>(start.QuadPart) + n * period;
+    }
+    const double wait = target - static_cast<double>(now.QuadPart);
+    if (wait > 0) {
+      LARGE_INTEGER due;
+      due.QuadPart = -static_cast<LONGLONG>(wait * 10000000.0 / static_cast<double>(freq.QuadPart));
+      if (due.QuadPart < 0 && SetWaitableTimer(timer, &due, 0, nullptr, nullptr, FALSE)) WaitForSingleObject(timer, INFINITE);
+    }
+    if (fputc('t', stdout) == EOF || fflush(stdout) != 0) return 0;
+  }
+}
+
 int wmain(int argc, wchar_t **argv) {
   if (argc < 2) {
-    fprintf(stderr, "Usage : window-audio.exe hwnd:<handle> | pid:<pid> | exclude:<pid> | games:<pid> | exe:<nom.exe> | apps | prio:<pid>,...\n");
+    fprintf(stderr, "Usage : window-audio.exe hwnd:<handle> | pid:<pid> | exclude:<pid> | games:<pid> | exe:<nom.exe> | apps | prio:<pid>,... | clock:<fps>\n");
     return 2;
   }
   const wchar_t *arg = argv[1];
   if (wcsncmp(arg, L"games:", 6) == 0) return watchGames(wcstoul(arg + 6, nullptr, 10));
   if (wcsncmp(arg, L"prio:", 5) == 0) return raisePriority(arg + 5);
+  if (wcsncmp(arg, L"clock:", 6) == 0) return renderClock(wcstod(arg + 6, nullptr));
   if (wcscmp(arg, L"apps") == 0) return listApps();
   if (wcsncmp(arg, L"exe:", 4) == 0) {
     CoInitializeEx(nullptr, COINIT_MULTITHREADED);

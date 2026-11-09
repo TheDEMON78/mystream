@@ -230,10 +230,32 @@ async function screenOf([left, top, right, bottom]) {
   }
 }
 
+/**
+ * Horloge de rendu précise (voir renderClock dans window-audio.cpp) :
+ * `onTick` est appelé à chaque image, à l'instant exact.
+ */
+let clock = null;
+function renderClock(fps, onTick) {
+  if (clock) {
+    clock.kill();
+    clock = null;
+  }
+  if (!fps || !available()) return false;
+  const proc = spawn(helperPath(), [`clock:${fps}`], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+  clock = proc;
+  proc.stdout.on('data', () => onTick());
+  proc.on('error', () => {});
+  proc.on('exit', () => {
+    if (clock === proc) clock = null;
+  });
+  return true;
+}
+
 function stopAll() {
   for (const id of [...captures.keys()]) stop(id);
   gameWatch.users.clear();
   watchGames(null, false, gameWatch.send);
+  renderClock(0);
 }
 
-module.exports = { start, stop, stopAll, available, listApps, watchGames, currentGame: () => gameWatch.current, raisePriority, gpuPriority, priority: () => priority };
+module.exports = { start, stop, stopAll, available, renderClock, listApps, watchGames, currentGame: () => gameWatch.current, raisePriority, gpuPriority, priority: () => priority };

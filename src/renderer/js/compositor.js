@@ -244,18 +244,41 @@
       this.next = performance.now();
       this.clock = null;
       this.window = { frames: 0, synced: 0, start: this.next, maxLate: 0 };
-      this.tick(true);
+      // Horloge native précise (Windows) : un top à chaque image, à l'instant exact.
+      if (window.api.renderClock && !this.listening) {
+        this.listening = true;
+        window.api.onRenderTick(() => this.externalTick());
+      }
+      if (window.api.renderClock) window.api.renderClock(fps).catch(() => {});
+      this.tick('timer');
+    },
+
+    /** Horloge native active : des tops sont arrivés récemment. */
+    get native() {
+      return performance.now() - (this.extLast || -1e9) < this.interval * 3;
+    },
+
+    /**
+     * Top de l'horloge native. Sans capture qui sert d'horloge, chaque top
+     * donne une image ; avec, le top ne sert que de filet si l'image capturée
+     * suivante tarde.
+     */
+    externalTick() {
+      const now = performance.now();
+      this.extLast = now;
+      if (this.clock ? now >= this.next + this.interval * 0.5 : now >= this.next - this.interval * 0.5) this.tick('native');
     },
 
     /** Nouvelle image d'une capture : composée tout de suite si elle sert d'horloge et qu'une image est due. */
     sourceFrame(rt, t) {
       if (rt !== this.clock || t < this.next - this.interval * 0.25) return;
-      this.tick(false);
+      this.tick('capture');
     },
 
-    tick(fromTimer) {
+    /** kind : 'timer' (minuteur du navigateur), 'native' (horloge native) ou 'capture' (image capturée). */
+    tick(kind) {
       const now = performance.now();
-      if (fromTimer) {
+      if (kind === 'timer') {
         const late = now - this.due;
         if (late > this.window.maxLate) this.window.maxLate = late;
       }
@@ -271,7 +294,7 @@
         if (!document.hidden || MS.outputs.isAnyActive()) {
           this.frame();
           this.window.frames++;
-          if (!fromTimer) this.window.synced++;
+          if (kind === 'capture') this.window.synced++;
           const track = MS.outputs.videoTrack;
           if (track && track.readyState === 'live') {
             const t = performance.now();
@@ -290,12 +313,14 @@
         this.stats.fps = (this.window.frames * 1000) / (end - this.window.start);
         this.stats.maxLateMs = this.window.maxLate;
         this.stats.synced = this.window.frames ? Math.round((this.window.synced * 100) / this.window.frames) : 0;
+        this.stats.clockSource = this.clock ? 'capture' : this.native ? 'native' : 'timer';
         this.window = { frames: 0, synced: 0, start: end, maxLate: 0 };
       }
-      this.next = fromTimer ? this.next + this.interval : now + this.interval;
+      this.next = kind === 'timer' ? this.next + this.interval : now + this.interval;
       if (this.cancel) this.cancel();
-      this.due = this.next + (this.clock ? this.interval * 0.5 : 0);
-      this.cancel = clock.at(() => this.tick(true), this.due);
+      // Avec l'horloge native, le minuteur n'est qu'un filet de sécurité si les tops s'arrêtent.
+      this.due = this.next + (this.native ? this.interval * 2 : this.clock ? this.interval * 0.5 : 0);
+      this.cancel = clock.at(() => this.tick('timer'), this.due);
       this.stats.timerLateMs = clock.lateMs;
     },
 

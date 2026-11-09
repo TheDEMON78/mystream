@@ -56,6 +56,8 @@ contextBridge.exposeInMainWorld('api', {
   browserPaint: (id, on) => ipcRenderer.send('browser:paint', id, on),
   onBrowserFrame: listen('browser:frame'),
   onBrowserTexture: (fn) => (onTexture = fn),
+  renderClock: (fps) => ipcRenderer.invoke('render:clock', fps),
+  onRenderTick: (fn) => ipcRenderer.on('render:tick', () => fn()),
   onBrowserError: listen('browser:error'),
   onBrowserAudio: listen('browser:audio'),
   winAudioStart: (id, captureId) => ipcRenderer.send('winaudio:start', id, captureId),
