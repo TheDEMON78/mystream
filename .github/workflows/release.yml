@@ -64,7 +64,7 @@ jobs:
         run: |
           for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set VSDIR=%%i
           call "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat"
-          cl /nologo /O2 /EHsc /W3 /MT /std:c++17 /permissive- native\gpu-capture.cpp /Fo:native\bin\ /Fe:native\bin\gpu-capture.exe
+          cl /nologo /O2 /EHsc /W3 /MT /std:c++20 /permissive- /D_CRT_SECURE_NO_WARNINGS native\gpu-capture.cpp /Fo:native\bin\ /Fe:native\bin\gpu-capture.exe
           if exist native\bin\gpu-capture.obj del native\bin\gpu-capture.obj
       - run: npm pkg set version=${{ needs.version.outputs.version }}
       - run: npx electron-builder --publish never
