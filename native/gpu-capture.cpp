@@ -43,6 +43,7 @@
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "windowsapp.lib")
+#pragma comment(lib, "user32.lib")
 
 using namespace winrt;
 using namespace winrt::Windows::Graphics::Capture;
