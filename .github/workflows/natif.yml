@@ -18,6 +18,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Compiler
+        env:
+          MYSTREAM_BUILD: ${{ github.run_number }}
         run: cargo build --release
       - name: Récupérer FFmpeg
         shell: pwsh

@@ -20,13 +20,7 @@ pub struct StreamSettings {
 
 impl Default for StreamSettings {
     fn default() -> Self {
-        Self {
-            server: String::new(),
-            key: String::new(),
-            video_bitrate: 6000,
-            audio_bitrate: 160,
-            encoder: "auto".into(),
-        }
+        Self { server: String::new(), key: String::new(), video_bitrate: 6000, audio_bitrate: 160, encoder: "auto".into() }
     }
 }
 
@@ -41,16 +35,8 @@ pub struct RecordSettings {
 
 impl Default for RecordSettings {
     fn default() -> Self {
-        let folder = dirs::video_dir()
-            .or_else(dirs::home_dir)
-            .unwrap_or_else(|| PathBuf::from("."))
-            .to_string_lossy()
-            .into_owned();
-        Self {
-            folder,
-            format: "mkv".into(),
-            video_bitrate: 40000,
-        }
+        let folder = dirs::video_dir().or_else(dirs::home_dir).unwrap_or_else(|| PathBuf::from(".")).to_string_lossy().into_owned();
+        Self { folder, format: "mkv".into(), video_bitrate: 40000 }
     }
 }
 
@@ -65,14 +51,38 @@ pub struct AudioSettings {
 
 impl Default for AudioSettings {
     fn default() -> Self {
-        Self {
-            mic_volume: 1.0,
-            mic_muted: false,
-            desktop_volume: 1.0,
-            desktop_muted: false,
-        }
+        Self { mic_volume: 1.0, mic_muted: false, desktop_volume: 1.0, desktop_muted: false }
     }
 }
+
+/// Contrôle à distance compatible obs-websocket (Stream Deck…).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RemoteSettings {
+    pub enabled: bool,
+    pub port: u16,
+    /// Mot de passe (généré au premier lancement).
+    pub password: String,
+    /// Accepter les appareils du réseau local (sinon ce PC uniquement).
+    pub lan: bool,
+}
+
+impl Default for RemoteSettings {
+    fn default() -> Self {
+        Self { enabled: true, port: 4455, password: String::new(), lan: false }
+    }
+}
+
+/// Raccourcis clavier globaux (fonctionnent même en jeu) : action -> combinaison.
+pub const HOTKEY_ACTIONS: [(&str, &str); 7] = [
+    ("stream", "Démarrer / arrêter le streaming"),
+    ("record", "Démarrer / arrêter l'enregistrement"),
+    ("mic", "Couper / rétablir le micro"),
+    ("desktop", "Couper / rétablir le son du bureau"),
+    ("transition", "Transition (mode studio)"),
+    ("next", "Scène suivante"),
+    ("prev", "Scène précédente"),
+];
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
@@ -86,6 +96,8 @@ pub struct Settings {
     pub transition: Transition,
     /// Mode studio : on prépare une scène dans l'aperçu avant de la passer à l'antenne.
     pub studio: bool,
+    pub remote: RemoteSettings,
+    pub hotkeys: std::collections::BTreeMap<String, String>,
 }
 
 impl Default for Settings {
@@ -99,6 +111,8 @@ impl Default for Settings {
             audio: AudioSettings::default(),
             transition: Transition::default(),
             studio: false,
+            remote: RemoteSettings::default(),
+            hotkeys: Default::default(),
         }
     }
 }
@@ -121,11 +135,7 @@ pub enum SourceKind {
     /// Image fixe (PNG, JPEG…).
     Image { path: String },
     /// Aplat de couleur.
-    Color {
-        rgba: [u8; 4],
-        width: u32,
-        height: u32,
-    },
+    Color { rgba: [u8; 4], width: u32, height: u32 },
     /// Texte.
     Text {
         text: String,
@@ -143,12 +153,7 @@ pub enum SourceKind {
         looping: bool,
     },
     /// Caméra (webcam, carte d'acquisition).
-    Camera {
-        device: String,
-        width: u32,
-        height: u32,
-        fps: u32,
-    },
+    Camera { device: String, width: u32, height: u32, fps: u32 },
     /// Son d'une application seule (Discord, navigateur…), sans image.
     AppAudio { exe: String },
 }
@@ -280,10 +285,7 @@ pub struct Transition {
 
 impl Default for Transition {
     fn default() -> Self {
-        Self {
-            kind: TransitionKind::Fade,
-            duration_ms: 300,
-        }
+        Self { kind: TransitionKind::Fade, duration_ms: 300 }
     }
 }
 
@@ -321,20 +323,9 @@ pub struct Project {
 
 impl Default for Project {
     fn default() -> Self {
-        let mut p = Self {
-            settings: Settings::default(),
-            sources: vec![],
-            scenes: vec![],
-            current: 0,
-            preview: 0,
-            next_id: 1,
-        };
+        let mut p = Self { settings: Settings::default(), sources: vec![], scenes: vec![], current: 0, preview: 0, next_id: 1 };
         let id = p.new_id();
-        p.scenes.push(Scene {
-            id,
-            name: "Scène".into(),
-            items: vec![],
-        });
+        p.scenes.push(Scene { id, name: "Scène".into(), items: vec![] });
         p.current = id;
         p
     }
@@ -342,10 +333,7 @@ impl Default for Project {
 
 impl Project {
     fn path() -> PathBuf {
-        dirs::config_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("MyStream-natif")
-            .join("projet.json")
+        dirs::config_dir().unwrap_or_else(|| PathBuf::from(".")).join("MyStream-natif").join("projet.json")
     }
 
     pub fn load() -> Self {
@@ -356,10 +344,7 @@ impl Project {
                 Err(e) => {
                     // Projet illisible : on le met de côté au lieu de l'écraser.
                     let backup = path.with_extension("json.illisible");
-                    log::error!(
-                        "Projet illisible ({e}) : copie conservée dans {}",
-                        backup.display()
-                    );
+                    log::error!("Projet illisible ({e}) : copie conservée dans {}", backup.display());
                     let _ = std::fs::copy(&path, &backup);
                     Project::default()
                 }
@@ -367,16 +352,16 @@ impl Project {
             Err(_) => Project::default(),
         };
         if p.scenes.is_empty() {
-            p = Project {
-                settings: p.settings,
-                ..Project::default()
-            };
+            p = Project { settings: p.settings, ..Project::default() };
         }
         if p.scene(p.current).is_none() {
             p.current = p.scenes[0].id;
         }
         if p.scene(p.preview).is_none() {
             p.preview = p.current;
+        }
+        if p.settings.remote.password.is_empty() {
+            p.settings.remote.password = crate::remote::random_token(16);
         }
         p
     }
@@ -421,31 +406,14 @@ impl Project {
         if !names.iter().any(|n| n == base) {
             return base.to_string();
         }
-        (2..)
-            .map(|i| format!("{base} {i}"))
-            .find(|n| !names.contains(n))
-            .unwrap()
+        (2..).map(|i| format!("{base} {i}")).find(|n| !names.contains(n)).unwrap()
     }
 
     pub fn add_source(&mut self, name: &str, kind: SourceKind) -> u64 {
         let id = self.new_id();
         let name = self.unique_name(name, self.sources.iter().map(|s| s.name.clone()));
-        self.sources.push(Source {
-            id,
-            name,
-            kind,
-            filters: Filters::default(),
-            volume: 1.0,
-            muted: false,
-        });
-        let item = Item {
-            id: self.new_id(),
-            source: id,
-            x: 0.0,
-            y: 0.0,
-            scale: None,
-            visible: true,
-        };
+        self.sources.push(Source { id, name, kind, filters: Filters::default(), volume: 1.0, muted: false });
+        let item = Item { id: self.new_id(), source: id, x: 0.0, y: 0.0, scale: None, visible: true };
         let edit = self.edit_scene();
         if let Some(scene) = self.scene_mut(edit) {
             scene.items.insert(0, item);
@@ -455,23 +423,12 @@ impl Project {
 
     /// Scène modifiée par l'interface : l'aperçu en mode studio, sinon celle à l'antenne.
     pub fn edit_scene(&self) -> u64 {
-        if self.settings.studio {
-            self.preview
-        } else {
-            self.current
-        }
+        if self.settings.studio { self.preview } else { self.current }
     }
 
     /// Ajoute une source existante (partagée) à une scène.
     pub fn add_existing(&mut self, scene: u64, source: u64) {
-        let item = Item {
-            id: self.new_id(),
-            source,
-            x: 0.0,
-            y: 0.0,
-            scale: None,
-            visible: true,
-        };
+        let item = Item { id: self.new_id(), source, x: 0.0, y: 0.0, scale: None, visible: true };
         if let Some(s) = self.scene_mut(scene) {
             s.items.insert(0, item);
         }
@@ -486,11 +443,7 @@ impl Project {
             return;
         };
         let source = s.items.remove(pos).source;
-        if !self
-            .scenes
-            .iter()
-            .any(|s| s.items.iter().any(|i| i.source == source))
-        {
+        if !self.scenes.iter().any(|s| s.items.iter().any(|i| i.source == source)) {
             self.sources.retain(|s| s.id != source);
         }
     }
@@ -498,11 +451,7 @@ impl Project {
     pub fn add_scene(&mut self) -> u64 {
         let id = self.new_id();
         let name = self.unique_name("Scène", self.scenes.iter().map(|s| s.name.clone()));
-        self.scenes.push(Scene {
-            id,
-            name,
-            items: vec![],
-        });
+        self.scenes.push(Scene { id, name, items: vec![] });
         id
     }
 
@@ -510,10 +459,7 @@ impl Project {
         if self.scenes.len() <= 1 {
             return;
         }
-        let items: Vec<u64> = self
-            .scene(id)
-            .map(|s| s.items.iter().map(|i| i.id).collect())
-            .unwrap_or_default();
+        let items: Vec<u64> = self.scene(id).map(|s| s.items.iter().map(|i| i.id).collect()).unwrap_or_default();
         for item in items {
             self.remove_item(id, item);
         }

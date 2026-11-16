@@ -27,12 +27,7 @@ pub struct Frame {
 
 impl Frame {
     pub fn new(width: u32, height: u32, data: Vec<u8>) -> Self {
-        Self {
-            width,
-            height,
-            data,
-            seq: next_seq(),
-        }
+        Self { width, height, data, seq: next_seq() }
     }
 }
 
@@ -108,18 +103,9 @@ impl Runtime {
         let slot = Slot::default();
         let status = Arc::new(Status::default());
         match kind {
-            SourceKind::Color {
-                rgba,
-                width,
-                height,
-            } => {
+            SourceKind::Color { rgba, width, height } => {
                 let (w, h) = ((*width).max(1), (*height).max(1));
-                let data = rgba
-                    .iter()
-                    .copied()
-                    .cycle()
-                    .take((w * h * 4) as usize)
-                    .collect();
+                let data = rgba.iter().copied().cycle().take((w * h * 4) as usize).collect();
                 slot.set(Frame::new(w, h, data));
             }
             SourceKind::Image { path } => match image::open(path) {
@@ -129,49 +115,19 @@ impl Runtime {
                 }
                 Err(e) => status.fail(format!("Image illisible ({path}) : {e}")),
             },
-            SourceKind::Text {
-                text,
-                size,
-                rgba,
-                background,
-                mono,
-            } => slot.set(render_text(text, *size, *rgba, *background, *mono)),
-            SourceKind::Media { path, looping } => {
-                start_media(path.clone(), *looping, slot.clone(), status.clone(), track)
-            }
-            SourceKind::Camera {
-                device,
-                width,
-                height,
-                fps: cam_fps,
-            } => start_camera(
-                device.clone(),
-                *width,
-                *height,
-                *cam_fps,
-                slot.clone(),
-                status.clone(),
-            ),
-            SourceKind::Display { monitor } => {
-                platform::start_display(*monitor, fps, slot.clone(), status.clone())
-            }
-            SourceKind::Window { title, .. } => {
-                platform::start_window(title.clone(), fps, slot.clone(), status.clone(), track)
-            }
-            SourceKind::Game { .. } => {
-                platform::start_game(fps, slot.clone(), status.clone(), track)
-            }
+            SourceKind::Text { text, size, rgba, background, mono } => slot.set(render_text(text, *size, *rgba, *background, *mono)),
+            SourceKind::Media { path, looping } => start_media(path.clone(), *looping, slot.clone(), status.clone(), track),
+            SourceKind::Camera { device, width, height, fps: cam_fps } => start_camera(device.clone(), *width, *height, *cam_fps, slot.clone(), status.clone()),
+            SourceKind::Display { monitor } => platform::start_display(*monitor, fps, slot.clone(), status.clone()),
+            SourceKind::Window { title, .. } => platform::start_window(title.clone(), fps, slot.clone(), status.clone(), track),
+            SourceKind::Game { .. } => platform::start_game(fps, slot.clone(), status.clone(), track),
             SourceKind::AppAudio { exe } => {
                 if let Some(t) = track {
                     platform::start_app_audio(exe.clone(), status.clone(), t);
                 }
             }
         }
-        Self {
-            slot,
-            status,
-            kind: kind.clone(),
-        }
+        Self { slot, status, kind: kind.clone() }
     }
 
     pub fn kind(&self) -> &SourceKind {
@@ -203,38 +159,19 @@ fn render_text(text: &str, size: f32, rgba: [u8; 4], background: [u8; 4], mono: 
     use std::sync::OnceLock;
     static FONTS: OnceLock<(fontdue::Font, fontdue::Font)> = OnceLock::new();
     let (sans, monospace) = FONTS.get_or_init(|| {
-        let f = |b: &'static [u8]| {
-            fontdue::Font::from_bytes(b, fontdue::FontSettings::default()).expect("police intégrée")
-        };
-        (
-            f(epaint_default_fonts::UBUNTU_LIGHT),
-            f(epaint_default_fonts::HACK_REGULAR),
-        )
+        let f = |b: &'static [u8]| fontdue::Font::from_bytes(b, fontdue::FontSettings::default()).expect("police intégrée");
+        (f(epaint_default_fonts::UBUNTU_LIGHT), f(epaint_default_fonts::HACK_REGULAR))
     });
     let font = if mono { monospace } else { sans };
     let size = size.clamp(6.0, 400.0);
     let lm = font.horizontal_line_metrics(size);
-    let (ascent, line_h) = lm
-        .map(|m| (m.ascent, m.new_line_size))
-        .unwrap_or((size * 0.8, size * 1.2));
-    let lines: Vec<&str> = if text.is_empty() {
-        vec![" "]
-    } else {
-        text.lines().collect()
-    };
+    let (ascent, line_h) = lm.map(|m| (m.ascent, m.new_line_size)).unwrap_or((size * 0.8, size * 1.2));
+    let lines: Vec<&str> = if text.is_empty() { vec![" "] } else { text.lines().collect() };
     let pad = (size * 0.25).ceil() as i32;
-    let widths: Vec<f32> = lines
-        .iter()
-        .map(|l| l.chars().map(|c| font.metrics(c, size).advance_width).sum())
-        .collect();
+    let widths: Vec<f32> = lines.iter().map(|l| l.chars().map(|c| font.metrics(c, size).advance_width).sum()).collect();
     let w = (widths.iter().cloned().fold(1.0, f32::max).ceil() as i32 + pad * 2).max(2) as u32;
     let h = ((line_h * lines.len() as f32).ceil() as i32 + pad * 2).max(2) as u32;
-    let mut data: Vec<u8> = background
-        .iter()
-        .copied()
-        .cycle()
-        .take((w * h * 4) as usize)
-        .collect();
+    let mut data: Vec<u8> = background.iter().copied().cycle().take((w * h * 4) as usize).collect();
     for (li, line) in lines.iter().enumerate() {
         let mut x = pad as f32;
         let baseline = pad as f32 + ascent + li as f32 * line_h;
@@ -259,11 +196,7 @@ fn render_text(text: &str, size: f32, rgba: [u8; 4], background: [u8; 4], mono: 
                     for k in 0..3 {
                         let src = rgba[k] as f32;
                         let dst = data[i + k] as f32;
-                        data[i + k] = if oa > 0.0 {
-                            ((src * a + dst * da * (1.0 - a)) / oa).round() as u8
-                        } else {
-                            0
-                        };
+                        data[i + k] = if oa > 0.0 { ((src * a + dst * da * (1.0 - a)) / oa).round() as u8 } else { 0 };
                     }
                     data[i + 3] = (oa * 255.0).round() as u8;
                 }
@@ -290,14 +223,8 @@ fn ffmpeg() -> Command {
 
 /// Taille de la vidéo et présence de son d'un fichier, lues dans la sortie de « ffmpeg -i ».
 fn probe(path: &str) -> (Option<(u32, u32)>, bool) {
-    let out = ffmpeg()
-        .args(["-i", path])
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .output();
-    let text = out
-        .map(|o| String::from_utf8_lossy(&o.stderr).into_owned())
-        .unwrap_or_default();
+    let out = ffmpeg().args(["-i", path]).stdout(Stdio::null()).stderr(Stdio::piped()).output();
+    let text = out.map(|o| String::from_utf8_lossy(&o.stderr).into_owned()).unwrap_or_default();
     let size = text
         .lines()
         .filter(|l| l.contains("Video:") && !l.contains("attached pic"))
@@ -323,31 +250,19 @@ fn pump_video(mut child: Child, w: u32, h: u32, slot: Slot, status: Arc<Status>)
     });
 }
 
-fn start_media(
-    path: String,
-    looping: bool,
-    slot: Slot,
-    status: Arc<Status>,
-    track: Option<Arc<Track>>,
-) {
+fn start_media(path: String, looping: bool, slot: Slot, status: Arc<Status>, track: Option<Arc<Track>>) {
     std::thread::spawn(move || {
         let (size, has_audio) = probe(&path);
         if size.is_none() && !has_audio {
             return status.fail(format!("Fichier illisible : {path}"));
         }
-        let lp: Vec<&str> = if looping {
-            vec!["-stream_loop", "-1"]
-        } else {
-            vec![]
-        };
+        let lp: Vec<&str> = if looping { vec!["-stream_loop", "-1"] } else { vec![] };
         // -re : lecture à la vitesse normale.
         if let Some((w, h)) = size {
             let child = ffmpeg()
                 .args(["-loglevel", "error", "-re"])
                 .args(&lp)
-                .args([
-                    "-i", &path, "-an", "-pix_fmt", "rgba", "-f", "rawvideo", "-",
-                ])
+                .args(["-i", &path, "-an", "-pix_fmt", "rgba", "-f", "rawvideo", "-"])
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::null())
@@ -361,9 +276,7 @@ fn start_media(
             let child = ffmpeg()
                 .args(["-loglevel", "error", "-re"])
                 .args(&lp)
-                .args([
-                    "-i", &path, "-vn", "-f", "f32le", "-ar", "48000", "-ac", "2", "-",
-                ])
+                .args(["-i", &path, "-vn", "-f", "f32le", "-ar", "48000", "-ac", "2", "-"])
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::null())
@@ -383,14 +296,8 @@ fn start_media(
 /// Caméras disponibles (DirectShow sous Windows, V4L2 sous Linux).
 pub fn cameras() -> Vec<String> {
     if cfg!(windows) {
-        let out = ffmpeg()
-            .args(["-list_devices", "true", "-f", "dshow", "-i", "dummy"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .output();
-        let text = out
-            .map(|o| String::from_utf8_lossy(&o.stderr).into_owned())
-            .unwrap_or_default();
+        let out = ffmpeg().args(["-list_devices", "true", "-f", "dshow", "-i", "dummy"]).stdout(Stdio::null()).stderr(Stdio::piped()).output();
+        let text = out.map(|o| String::from_utf8_lossy(&o.stderr).into_owned()).unwrap_or_default();
         text.lines()
             .filter(|l| l.contains("(video)"))
             .filter_map(|l| {
@@ -401,12 +308,7 @@ pub fn cameras() -> Vec<String> {
             .collect()
     } else {
         let mut list: Vec<String> = std::fs::read_dir("/dev")
-            .map(|d| {
-                d.filter_map(|e| e.ok())
-                    .map(|e| e.path().to_string_lossy().into_owned())
-                    .filter(|p| p.starts_with("/dev/video"))
-                    .collect()
-            })
+            .map(|d| d.filter_map(|e| e.ok()).map(|e| e.path().to_string_lossy().into_owned()).filter(|p| p.starts_with("/dev/video")).collect())
             .unwrap_or_default();
         list.sort();
         list
@@ -421,35 +323,13 @@ fn start_camera(device: String, w: u32, h: u32, fps: u32, slot: Slot, status: Ar
         let scale = format!("scale={w}:{h}");
         // L'image est mise à la taille demandée en sortie : la taille des images lues est connue.
         let input: Vec<String> = if cfg!(windows) {
-            [
-                "-f",
-                "dshow",
-                "-rtbufsize",
-                "128M",
-                "-video_size",
-                &size,
-                "-framerate",
-                &rate,
-                "-i",
-            ]
-            .iter()
-            .map(|s| s.to_string())
-            .chain([format!("video={device}")])
-            .collect()
+            ["-f", "dshow", "-rtbufsize", "128M", "-video_size", &size, "-framerate", &rate, "-i"]
+                .iter()
+                .map(|s| s.to_string())
+                .chain([format!("video={device}")])
+                .collect()
         } else {
-            [
-                "-f",
-                "v4l2",
-                "-video_size",
-                &size,
-                "-framerate",
-                &rate,
-                "-i",
-                &device,
-            ]
-            .iter()
-            .map(|s| s.to_string())
-            .collect()
+            ["-f", "v4l2", "-video_size", &size, "-framerate", &rate, "-i", &device].iter().map(|s| s.to_string()).collect()
         };
         let child = ffmpeg()
             .args(["-loglevel", "error"])
@@ -486,24 +366,16 @@ pub struct MonitorInfo {
 mod platform {
     use super::*;
     use windows::Win32::Foundation::{CloseHandle, HWND, RECT};
-    use windows::Win32::Graphics::Gdi::{
-        GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
-    };
-    use windows::Win32::System::Diagnostics::ToolHelp::{
-        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
-        TH32CS_SNAPPROCESS,
-    };
-    use windows::Win32::UI::WindowsAndMessaging::{
-        GetClassNameW, GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId, IsWindow,
-        IsWindowVisible,
-    };
+    use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow};
+    use windows::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS};
+    use windows::Win32::UI::WindowsAndMessaging::{GetClassNameW, GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId, IsWindow, IsWindowVisible};
     use windows_capture::capture::{Context, GraphicsCaptureApiHandler};
     use windows_capture::frame::Frame as WcFrame;
     use windows_capture::graphics_capture_api::InternalCaptureControl;
     use windows_capture::monitor::Monitor;
     use windows_capture::settings::{
-        ColorFormat, CursorCaptureSettings, DirtyRegionSettings, DrawBorderSettings,
-        GraphicsCaptureItemType, MinimumUpdateIntervalSettings, SecondaryWindowSettings, Settings,
+        ColorFormat, CursorCaptureSettings, DirtyRegionSettings, DrawBorderSettings, GraphicsCaptureItemType, MinimumUpdateIntervalSettings,
+        SecondaryWindowSettings, Settings,
     };
     use windows_capture::window::Window;
 
@@ -520,18 +392,10 @@ mod platform {
         type Error = Box<dyn std::error::Error + Send + Sync>;
 
         fn new(ctx: Context<Self::Flags>) -> Result<Self, Self::Error> {
-            Ok(Self {
-                slot: ctx.flags.0,
-                status: ctx.flags.1,
-                scratch: Vec::new(),
-            })
+            Ok(Self { slot: ctx.flags.0, status: ctx.flags.1, scratch: Vec::new() })
         }
 
-        fn on_frame_arrived(
-            &mut self,
-            frame: &mut WcFrame,
-            control: InternalCaptureControl,
-        ) -> Result<(), Self::Error> {
+        fn on_frame_arrived(&mut self, frame: &mut WcFrame, control: InternalCaptureControl) -> Result<(), Self::Error> {
             if self.status.stopped() {
                 control.stop();
                 return Ok(());
@@ -549,20 +413,10 @@ mod platform {
         }
     }
 
-    fn settings<T: TryInto<GraphicsCaptureItemType>>(
-        item: T,
-        cursor: bool,
-        fps: u32,
-        slot: Slot,
-        status: Arc<Status>,
-    ) -> Settings<Flags, T> {
+    fn settings<T: TryInto<GraphicsCaptureItemType>>(item: T, cursor: bool, fps: u32, slot: Slot, status: Arc<Status>) -> Settings<Flags, T> {
         Settings::new(
             item,
-            if cursor {
-                CursorCaptureSettings::WithCursor
-            } else {
-                CursorCaptureSettings::WithoutCursor
-            },
+            if cursor { CursorCaptureSettings::WithCursor } else { CursorCaptureSettings::WithoutCursor },
             // Pas de cadre jaune autour de la zone capturée (Windows 11).
             DrawBorderSettings::WithoutBorder,
             SecondaryWindowSettings::Default,
@@ -587,23 +441,11 @@ mod platform {
     }
 
     /// Capture d'une fenêtre jusqu'à ce qu'elle disparaisse ou que `alive` devienne faux.
-    fn capture_window(
-        window: Window,
-        fps: u32,
-        slot: &Slot,
-        status: &Arc<Status>,
-        alive: impl Fn() -> bool,
-    ) -> Result<(), String> {
+    fn capture_window(window: Window, fps: u32, slot: &Slot, status: &Arc<Status>, alive: impl Fn() -> bool) -> Result<(), String> {
         let sub = Arc::new(Status::default());
         let hwnd = HWND(window.as_raw_hwnd());
-        let control =
-            Handler::start_free_threaded(settings(window, false, fps, slot.clone(), sub.clone()))
-                .map_err(|e| e.to_string())?;
-        while !status.stopped()
-            && alive()
-            && unsafe { IsWindow(Some(hwnd)) }.as_bool()
-            && !control.is_finished()
-        {
+        let control = Handler::start_free_threaded(settings(window, false, fps, slot.clone(), sub.clone())).map_err(|e| e.to_string())?;
+        while !status.stopped() && alive() && unsafe { IsWindow(Some(hwnd)) }.as_bool() && !control.is_finished() {
             *status.fps.lock() = *sub.fps.lock();
             std::thread::sleep(Duration::from_millis(250));
         }
@@ -612,25 +454,14 @@ mod platform {
         Ok(())
     }
 
-    pub fn start_window(
-        title: String,
-        fps: u32,
-        slot: Slot,
-        status: Arc<Status>,
-        track: Option<Arc<Track>>,
-    ) {
+    pub fn start_window(title: String, fps: u32, slot: Slot, status: Arc<Status>, track: Option<Arc<Track>>) {
         std::thread::spawn(move || {
             // Comme OBS : la fenêtre (jeu pas encore lancé) est recherchée toutes les 2 s.
             while !status.stopped() {
                 match Window::from_contains_name(&title) {
                     Ok(window) => {
                         *status.error.lock() = None;
-                        let audio = track.as_ref().and_then(|t| {
-                            window
-                                .process_id()
-                                .ok()
-                                .map(|pid| process_audio(pid, status.clone(), t.clone()))
-                        });
+                        let audio = track.as_ref().and_then(|t| window.process_id().ok().map(|pid| process_audio(pid, status.clone(), t.clone())));
                         if let Err(e) = capture_window(window, fps, &slot, &status, || true) {
                             status.fail(format!("Capture de « {title} » impossible : {e}"));
                         }
@@ -638,11 +469,7 @@ mod platform {
                             a.store(true, Ordering::Relaxed);
                         }
                     }
-                    Err(_) => {
-                        *status.error.lock() = Some(format!(
-                            "Fenêtre « {title} » introuvable : nouvelle recherche toutes les 2 s"
-                        ))
-                    }
+                    Err(_) => *status.error.lock() = Some(format!("Fenêtre « {title} » introuvable : nouvelle recherche toutes les 2 s")),
                 }
                 std::thread::sleep(Duration::from_secs(2));
             }
@@ -660,14 +487,7 @@ mod platform {
             let n = GetClassNameW(hwnd, &mut class) as usize;
             let class = String::from_utf16_lossy(&class[..n]);
             // Bureau et barre des tâches : jamais un jeu.
-            if [
-                "Progman",
-                "WorkerW",
-                "Shell_TrayWnd",
-                "Windows.UI.Core.CoreWindow",
-            ]
-            .contains(&class.as_str())
-            {
+            if ["Progman", "WorkerW", "Shell_TrayWnd", "Windows.UI.Core.CoreWindow"].contains(&class.as_str()) {
                 return None;
             }
             let mut pid = 0u32;
@@ -678,16 +498,12 @@ mod platform {
             let mut r = RECT::default();
             GetWindowRect(hwnd, &mut r).ok()?;
             let mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
-            let mut mi = MONITORINFO {
-                cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-                ..Default::default()
-            };
+            let mut mi = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
             if !GetMonitorInfoW(mon, &mut mi).as_bool() {
                 return None;
             }
             let m = mi.rcMonitor;
-            (r.left <= m.left && r.top <= m.top && r.right >= m.right && r.bottom >= m.bottom)
-                .then_some((hwnd, pid))
+            (r.left <= m.left && r.top <= m.top && r.right >= m.right && r.bottom >= m.bottom).then_some((hwnd, pid))
         }
     }
 
@@ -707,9 +523,7 @@ mod platform {
                 *status.info.lock() = Some(if title.is_empty() { exe.clone() } else { title });
                 *status.error.lock() = None;
                 log::info!("Capture de jeu : {exe}");
-                let audio = track
-                    .as_ref()
-                    .map(|t| process_audio(pid, status.clone(), t.clone()));
+                let audio = track.as_ref().map(|t| process_audio(pid, status.clone(), t.clone()));
                 // Une autre application passe en plein écran : on la capture à la place.
                 let other = move || !matches!(fullscreen_foreground(), Some((h, _)) if h != hwnd);
                 if let Err(e) = capture_window(window, fps, &slot, &status, other) {
@@ -732,37 +546,20 @@ mod platform {
         std::thread::spawn(move || {
             let run = || -> Result<(), String> {
                 let _ = wasapi::initialize_mta();
-                let format =
-                    wasapi::WaveFormat::new(32, 32, wasapi::SampleType::Float, 48000, 2, None);
-                let mut client = wasapi::AudioClient::new_application_loopback_client(pid, true)
-                    .map_err(|e| e.to_string())?;
-                let mode = wasapi::StreamMode::EventsShared {
-                    autoconvert: true,
-                    buffer_duration_hns: 0,
-                };
-                client
-                    .initialize_client(&format, wasapi::Direction::Capture, mode, None)
-                    .map_err(|e| e.to_string())?;
+                let format = wasapi::WaveFormat::new(32, 32, wasapi::SampleType::Float, 48000, 2, None);
+                let mut client = wasapi::AudioClient::new_application_loopback_client(pid, true).map_err(|e| e.to_string())?;
+                let mode = wasapi::StreamMode::EventsShared { autoconvert: true, buffer_duration_hns: 0 };
+                client.initialize_client(&format, wasapi::Direction::Capture, mode, None).map_err(|e| e.to_string())?;
                 let event = client.set_get_eventhandle().map_err(|e| e.to_string())?;
                 let capture = client.get_audiocaptureclient().map_err(|e| e.to_string())?;
                 client.start_stream().map_err(|e| e.to_string())?;
                 let mut queue = std::collections::VecDeque::<u8>::new();
                 while !stop2.load(Ordering::Relaxed) && !status.stopped() {
-                    if capture
-                        .get_next_packet_size()
-                        .map_err(|e| e.to_string())?
-                        .unwrap_or(0)
-                        > 0
-                    {
-                        capture
-                            .read_from_device_to_deque(&mut queue)
-                            .map_err(|e| e.to_string())?;
+                    if capture.get_next_packet_size().map_err(|e| e.to_string())?.unwrap_or(0) > 0 {
+                        capture.read_from_device_to_deque(&mut queue).map_err(|e| e.to_string())?;
                         let n = queue.len() / 4 * 4;
                         let bytes: Vec<u8> = queue.drain(..n).collect();
-                        let samples: Vec<f32> = bytes
-                            .chunks_exact(4)
-                            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-                            .collect();
+                        let samples: Vec<f32> = bytes.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
                         track.push(&samples);
                     }
                     let _ = event.wait_for_event(200);
@@ -782,23 +579,12 @@ mod platform {
             let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
                 return vec![];
             };
-            let mut e = PROCESSENTRY32W {
-                dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
-                ..Default::default()
-            };
+            let mut e = PROCESSENTRY32W { dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
             let mut all = Vec::new();
             if Process32FirstW(snap, &mut e).is_ok() {
                 loop {
-                    let len = e
-                        .szExeFile
-                        .iter()
-                        .position(|c| *c == 0)
-                        .unwrap_or(e.szExeFile.len());
-                    all.push((
-                        e.th32ProcessID,
-                        e.th32ParentProcessID,
-                        String::from_utf16_lossy(&e.szExeFile[..len]),
-                    ));
+                    let len = e.szExeFile.iter().position(|c| *c == 0).unwrap_or(e.szExeFile.len());
+                    all.push((e.th32ProcessID, e.th32ParentProcessID, String::from_utf16_lossy(&e.szExeFile[..len])));
                     if Process32NextW(snap, &mut e).is_err() {
                         break;
                     }
@@ -812,14 +598,8 @@ mod platform {
     /// Processus principal d'un programme (celui dont le parent ne porte pas le même nom).
     fn find_process(exe: &str) -> Option<u32> {
         let all = processes();
-        let same: Vec<_> = all
-            .iter()
-            .filter(|p| p.2.eq_ignore_ascii_case(exe))
-            .collect();
-        same.iter()
-            .find(|p| !same.iter().any(|q| q.0 == p.1))
-            .or(same.first())
-            .map(|p| p.0)
+        let same: Vec<_> = all.iter().filter(|p| p.2.eq_ignore_ascii_case(exe)).collect();
+        same.iter().find(|p| !same.iter().any(|q| q.0 == p.1)).or(same.first()).map(|p| p.0)
     }
 
     pub fn start_app_audio(exe: String, status: Arc<Status>, track: Arc<Track>) {
@@ -847,25 +627,10 @@ mod platform {
 
     /// Programmes lancés, pour « Son d'une application ».
     pub fn programs() -> Vec<String> {
-        let skip = [
-            "svchost.exe",
-            "system",
-            "conhost.exe",
-            "csrss.exe",
-            "dllhost.exe",
-            "runtimebroker.exe",
-            "smss.exe",
-            "wininit.exe",
-            "services.exe",
-            "lsass.exe",
-        ];
-        let mut list: Vec<String> = processes()
-            .into_iter()
-            .map(|p| p.2)
-            .filter(|n| {
-                n.to_lowercase().ends_with(".exe") && !skip.contains(&n.to_lowercase().as_str())
-            })
-            .collect();
+        let skip =
+            ["svchost.exe", "system", "conhost.exe", "csrss.exe", "dllhost.exe", "runtimebroker.exe", "smss.exe", "wininit.exe", "services.exe", "lsass.exe"];
+        let mut list: Vec<String> =
+            processes().into_iter().map(|p| p.2).filter(|n| n.to_lowercase().ends_with(".exe") && !skip.contains(&n.to_lowercase().as_str())).collect();
         list.sort_by_key(|n| n.to_lowercase());
         list.dedup_by_key(|n| n.to_lowercase());
         list
@@ -876,25 +641,12 @@ mod platform {
             .unwrap_or_default()
             .iter()
             .enumerate()
-            .map(|(i, m)| MonitorInfo {
-                index: i,
-                name: format!(
-                    "Écran {} ({}×{})",
-                    i + 1,
-                    m.width().unwrap_or(0),
-                    m.height().unwrap_or(0)
-                ),
-            })
+            .map(|(i, m)| MonitorInfo { index: i, name: format!("Écran {} ({}×{})", i + 1, m.width().unwrap_or(0), m.height().unwrap_or(0)) })
             .collect()
     }
 
     pub fn windows() -> Vec<String> {
-        let mut list: Vec<String> = Window::enumerate()
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|w| w.title().ok())
-            .filter(|t| !t.trim().is_empty())
-            .collect();
+        let mut list: Vec<String> = Window::enumerate().unwrap_or_default().iter().filter_map(|w| w.title().ok()).filter(|t| !t.trim().is_empty()).collect();
         list.sort();
         list.dedup();
         list
@@ -935,16 +687,8 @@ mod platform {
         });
     }
 
-    pub fn start_window(
-        title: String,
-        _fps: u32,
-        _slot: Slot,
-        status: Arc<Status>,
-        _track: Option<Arc<Track>>,
-    ) {
-        status.fail(format!(
-            "Capture de fenêtre (« {title} ») disponible sous Windows uniquement"
-        ));
+    pub fn start_window(title: String, _fps: u32, _slot: Slot, status: Arc<Status>, _track: Option<Arc<Track>>) {
+        status.fail(format!("Capture de fenêtre (« {title} ») disponible sous Windows uniquement"));
     }
 
     pub fn start_game(_fps: u32, _slot: Slot, status: Arc<Status>, _track: Option<Arc<Track>>) {
@@ -952,9 +696,7 @@ mod platform {
     }
 
     pub fn start_app_audio(exe: String, status: Arc<Status>, _track: Arc<Track>) {
-        status.fail(format!(
-            "Son d'une application ({exe}) disponible sous Windows uniquement"
-        ));
+        status.fail(format!("Son d'une application ({exe}) disponible sous Windows uniquement"));
     }
 
     pub fn programs() -> Vec<String> {
@@ -966,15 +708,7 @@ mod platform {
             .unwrap_or_default()
             .iter()
             .enumerate()
-            .map(|(i, m)| MonitorInfo {
-                index: i,
-                name: format!(
-                    "Écran {} ({}×{})",
-                    i + 1,
-                    m.width().unwrap_or(0),
-                    m.height().unwrap_or(0)
-                ),
-            })
+            .map(|(i, m)| MonitorInfo { index: i, name: format!("Écran {} ({}×{})", i + 1, m.width().unwrap_or(0), m.height().unwrap_or(0)) })
             .collect()
     }
 

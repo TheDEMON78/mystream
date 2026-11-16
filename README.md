@@ -25,36 +25,42 @@ lancez `MyStream.exe` (FFmpeg est inclus).
 | Encodage | Deux fois : MediaRecorder puis FFmpeg (avec décodage entre les deux) | **Une seule fois**, FFmpeg (NVENC, Quick Sync, AMF ou x264) |
 | Mémoire | ~2 à 3 Go (un processus Chromium par page web) | Quelques centaines de Mo |
 
-## Fonctionnalités de la 0.1
+## Fonctionnalités
 
-- Scènes : ajouter, supprimer, renommer (double-clic), passer d'une scène à l'autre.
-- Sources : capture d'écran, capture de fenêtre (jeu ; recherchée toutes les
-  2 s si elle n'est pas encore ouverte), image, couleur. Afficher/masquer,
-  monter/descendre, retirer.
-- Aperçu interactif : clic pour sélectionner, glisser pour déplacer, molette
-  pour agrandir ou réduire ; « Ajuster à l'écran », « Taille d'origine ».
-- Mixeur : micro et son du bureau, volume, coupure, vumètres.
-- Streaming RTMP (Restream, Twitch, YouTube…) et enregistrement MKV/MP4,
-  simultanés.
-- Encodeur automatique : le meilleur encodeur matériel qui fonctionne
-  réellement sur le PC (testé au démarrage), sinon x264.
-- Barre d'état : images par seconde, temps de rendu, images manquées ou
-  perdues, durée et débit du live ou de l'enregistrement.
-- Projet enregistré automatiquement (`%APPDATA%\MyStream-natif\projet.json`).
+- **Scènes** : ajouter, supprimer, renommer, transitions (coupure, fondu,
+  glissement), **mode studio** (aperçu modifiable + bouton Transition).
+- **Sources** :
+  - capture de jeu **automatique** (plein écran ou fenêtré sans bordure,
+    gardée pendant un alt-tab), avec le son du jeu ;
+  - capture d'écran, capture de fenêtre (avec son), caméra ;
+  - image, couleur, texte, média (vidéo ou son, en boucle) ;
+  - son d'une application seule (Discord…), même en arrière-plan ;
+  - source partagée entre plusieurs scènes.
+- **Filtres** par source, sur la carte graphique : opacité, luminosité,
+  contraste, saturation, recadrage, miroir, retournement, incrustation (fond vert).
+- **Aperçu interactif** : clic pour sélectionner, glisser pour déplacer,
+  molette pour la taille.
+- **Mixeur** : micro, son du bureau et une piste par source sonore (volume,
+  coupure, vumètre).
+- **Streaming** RTMP et **enregistrement** MKV/MP4 simultanés, encodeur
+  matériel détecté automatiquement.
+- **Stream Deck** et autres télécommandes : serveur compatible
+  **obs-websocket 5** (port 4455, mot de passe généré ; plugin MyStream ou
+  plugins OBS, Touch Portal, Companion…).
+- **Raccourcis clavier globaux** (même en jeu) : streaming, enregistrement,
+  micro, son du bureau, transition, scène suivante/précédente.
+- **Import des collections OBS** (scènes, sources, positions, recadrages, volumes).
+- **Mises à jour automatiques** : une bannière propose la nouvelle préversion,
+  installée et relancée en un clic.
 
 ## Ce qui manque encore (par rapport à la version Electron)
 
-Par ordre de priorité proposé :
-
-1. Capture sans aucune copie vers le processeur (texture Windows Graphics
-   Capture partagée directement avec wgpu) et encodage NVENC depuis la carte
-   graphique.
-2. Capture de jeu automatique et son d'une application (Discord, jeu).
-3. Sources texte, média (vidéo), caméra.
-4. Transitions, mode studio, filtres (incrustation, recadrage, couleurs).
-5. Sources navigateur (alertes) et chat : moteur web à intégrer (WebView2).
-6. Connexion Restream, Stream Deck (obs-websocket), raccourcis globaux.
-7. Import des scènes OBS, mises à jour automatiques, installateur.
+1. Sources navigateur (alertes Streamlabs/StreamElements) et chat : il faut
+   intégrer un moteur web (WebView2).
+2. Connexion au compte Restream (titre, catégorie, spectateurs, chat).
+3. Installateur Windows (aujourd'hui : zip à décompresser).
+4. Capture sans aucune copie vers le processeur (texture partagée directement
+   avec wgpu) et encodage NVENC depuis la carte graphique.
 
 ## Développement
 

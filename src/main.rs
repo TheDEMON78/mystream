@@ -11,25 +11,21 @@ mod capture;
 mod compositor;
 mod engine;
 mod model;
+mod obs_import;
 mod output;
+mod remote;
+mod update;
 
 fn main() -> eframe::Result {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let mut options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
-        viewport: egui::ViewportBuilder::default()
-            .with_title("MyStream")
-            .with_inner_size([1440.0, 900.0])
-            .with_min_inner_size([1024.0, 680.0]),
+        viewport: egui::ViewportBuilder::default().with_title("MyStream").with_inner_size([1440.0, 900.0]).with_min_inner_size([1024.0, 680.0]),
         ..Default::default()
     };
     // La carte graphique la plus puissante (la même que le jeu sur un PC portable).
     if let egui_wgpu::WgpuSetup::CreateNew(setup) = &mut options.wgpu_options.wgpu_setup {
         setup.power_preference = wgpu::PowerPreference::HighPerformance;
     }
-    eframe::run_native(
-        "MyStream",
-        options,
-        Box::new(|cc| Ok(Box::new(app::App::new(cc)))),
-    )
+    eframe::run_native("MyStream", options, Box::new(|cc| Ok(Box::new(app::App::new(cc)))))
 }

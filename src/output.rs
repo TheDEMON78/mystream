@@ -57,11 +57,7 @@ pub fn ffmpeg_path() -> PathBuf {
     if let Ok(p) = std::env::var("MYSTREAM_FFMPEG") {
         return p.into();
     }
-    let name = if cfg!(windows) {
-        "ffmpeg.exe"
-    } else {
-        "ffmpeg"
-    };
+    let name = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
     if let Ok(exe) = std::env::current_exe()
         && let Some(dir) = exe.parent()
     {
@@ -140,134 +136,49 @@ fn video_args(enc: &str, kbps: u32, fps: u32) -> Vec<String> {
     let buf = format!("{}k", kbps * 2);
     let gop = (fps * 2).to_string();
     let mut a: Vec<&str> = match enc {
-        "h264_nvenc" => vec![
-            "-c:v", enc, "-preset", "p5", "-tune", "hq", "-rc", "cbr", "-bf", "2",
-        ],
+        "h264_nvenc" => vec!["-c:v", enc, "-preset", "p5", "-tune", "hq", "-rc", "cbr", "-bf", "2"],
         "h264_qsv" => vec!["-c:v", enc, "-preset", "medium"],
-        "h264_amf" => vec![
-            "-c:v",
-            enc,
-            "-usage",
-            "transcoding",
-            "-quality",
-            "quality",
-            "-rc",
-            "cbr",
-        ],
+        "h264_amf" => vec!["-c:v", enc, "-usage", "transcoding", "-quality", "quality", "-rc", "cbr"],
         "h264_videotoolbox" => vec!["-c:v", enc, "-realtime", "1"],
-        _ => vec![
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-tune",
-            "zerolatency",
-        ],
+        _ => vec!["-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency"],
     };
-    a.extend([
-        "-b:v", &rate, "-maxrate", &rate, "-bufsize", &buf, "-g", &gop,
-    ]);
+    a.extend(["-b:v", &rate, "-maxrate", &rate, "-bufsize", &buf, "-g", &gop]);
     a.into_iter().map(String::from).collect()
 }
 
 impl Output {
-    pub fn start(
-        kind: Kind,
-        s: &Settings,
-        width: u32,
-        height: u32,
-        audio: Receiver<Arc<Vec<f32>>>,
-    ) -> Result<Self> {
+    pub fn start(kind: Kind, s: &Settings, width: u32, height: u32, audio: Receiver<Arc<Vec<f32>>>) -> Result<Self> {
         let list = encoders();
         let wanted = &s.stream.encoder;
-        let encoder = if wanted != "auto" && list.contains(wanted) {
-            wanted.clone()
-        } else {
-            list[0].clone()
-        };
+        let encoder = if wanted != "auto" && list.contains(wanted) { wanted.clone() } else { list[0].clone() };
         let fps = s.fps;
 
         // Son : FFmpeg se connecte à ce port local et reçoit le mixage en flottants 32 bits.
         let listener = TcpListener::bind("127.0.0.1:0").context("port local pour le son")?;
         let port = listener.local_addr()?.port();
 
-        let mut args: Vec<String> = vec![
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-nostats",
-            "-progress",
-            "pipe:1",
-        ]
-        .into_iter()
-        .map(String::from)
-        .collect();
+        let mut args: Vec<String> = vec!["-hide_banner", "-loglevel", "error", "-nostats", "-progress", "pipe:1"].into_iter().map(String::from).collect();
         let size = format!("{width}x{height}");
         let rate = fps.to_string();
         args.extend(
-            [
-                "-f",
-                "rawvideo",
-                "-pix_fmt",
-                "nv12",
-                "-video_size",
-                &size,
-                "-framerate",
-                &rate,
-                "-thread_queue_size",
-                "64",
-                "-i",
-                "pipe:0",
-            ]
-            .into_iter()
-            .map(String::from),
+            ["-f", "rawvideo", "-pix_fmt", "nv12", "-video_size", &size, "-framerate", &rate, "-thread_queue_size", "64", "-i", "pipe:0"]
+                .into_iter()
+                .map(String::from),
         );
         let audio_url = format!("tcp://127.0.0.1:{port}");
-        args.extend(
-            [
-                "-f",
-                "f32le",
-                "-ar",
-                "48000",
-                "-ac",
-                "2",
-                "-thread_queue_size",
-                "1024",
-                "-i",
-                &audio_url,
-            ]
-            .into_iter()
-            .map(String::from),
-        );
+        args.extend(["-f", "f32le", "-ar", "48000", "-ac", "2", "-thread_queue_size", "1024", "-i", &audio_url].into_iter().map(String::from));
         args.extend(["-map", "0:v", "-map", "1:a"].into_iter().map(String::from));
         let (target, file) = match kind {
             Kind::Stream => {
                 if s.stream.server.trim().is_empty() || s.stream.key.trim().is_empty() {
-                    return Err(anyhow!(
-                        "Serveur ou clé de stream manquant (Paramètres > Stream)."
-                    ));
+                    return Err(anyhow!("Serveur ou clé de stream manquant (Paramètres > Stream)."));
                 }
                 args.extend(video_args(&encoder, s.stream.video_bitrate, fps));
-                (
-                    format!(
-                        "{}/{}",
-                        s.stream.server.trim_end_matches('/'),
-                        s.stream.key.trim()
-                    ),
-                    None,
-                )
+                (format!("{}/{}", s.stream.server.trim_end_matches('/'), s.stream.key.trim()), None)
             }
             Kind::Record => {
                 args.extend(video_args(&encoder, s.record.video_bitrate, fps));
-                let name = format!(
-                    "{}.{}",
-                    chrono_like_now(),
-                    if s.record.format == "mp4" {
-                        "mp4"
-                    } else {
-                        "mkv"
-                    }
-                );
+                let name = format!("{}.{}", chrono_like_now(), if s.record.format == "mp4" { "mp4" } else { "mkv" });
                 let path = PathBuf::from(&s.record.folder).join(name);
                 (path.to_string_lossy().into_owned(), Some(path))
             }
@@ -297,24 +208,14 @@ impl Output {
         );
         match kind {
             Kind::Stream => args.extend(["-f", "flv"].into_iter().map(String::from)),
-            Kind::Record
-                if file
-                    .as_ref()
-                    .is_some_and(|f| f.extension().is_some_and(|e| e == "mp4")) =>
-            {
+            Kind::Record if file.as_ref().is_some_and(|f| f.extension().is_some_and(|e| e == "mp4")) => {
                 args.extend(["-movflags", "+faststart"].into_iter().map(String::from))
             }
             Kind::Record => args.extend(["-f", "matroska"].into_iter().map(String::from)),
         }
         args.push(target);
 
-        let mut child = command()
-            .args(&args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .context("FFmpeg introuvable")?;
+        let mut child = command().args(&args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().context("FFmpeg introuvable")?;
         let stats = Arc::new(Mutex::new(Stats::default()));
 
         // Vidéo : tampon de 3 images ; si FFmpeg prend du retard, l'image est comptée perdue.
@@ -358,9 +259,7 @@ impl Output {
                 let mut s = st.lock();
                 match k {
                     "fps" => s.fps = v.trim().parse().unwrap_or(0.0),
-                    "bitrate" => {
-                        s.bitrate_kbps = v.trim().trim_end_matches("kbits/s").parse().unwrap_or(0.0)
-                    }
+                    "bitrate" => s.bitrate_kbps = v.trim().trim_end_matches("kbits/s").parse().unwrap_or(0.0),
                     "speed" => s.speed = v.trim().trim_end_matches('x').parse().unwrap_or(0.0),
                     "drop_frames" => s.drops = v.trim().parse().unwrap_or(0),
                     _ => {}
@@ -378,12 +277,7 @@ impl Output {
             let mut s = st.lock();
             s.ended = true;
             if !status.map(|s| s.success()).unwrap_or(false) {
-                let last = text
-                    .lines()
-                    .rev()
-                    .find(|l| !l.trim().is_empty())
-                    .unwrap_or("FFmpeg s'est arrêté")
-                    .to_string();
+                let last = text.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("FFmpeg s'est arrêté").to_string();
                 s.error = Some(last);
             }
         });
@@ -393,24 +287,12 @@ impl Output {
             line = line.replace(s.stream.key.trim(), "***"); // jamais la clé de stream dans le journal
         }
         log::info!("{} démarré ({encoder}) : {line}", kind.label());
-        Ok(Self {
-            kind,
-            encoder,
-            file,
-            started: Instant::now(),
-            stats,
-            video_tx: Some(video_tx),
-            child,
-            audio_stop,
-        })
+        Ok(Self { kind, encoder, file, started: Instant::now(), stats, video_tx: Some(video_tx), child, audio_stop })
     }
 
     /// Envoie une image NV12 ; renvoie false si FFmpeg est en retard (image perdue).
     pub fn push(&self, frame: Arc<Vec<u8>>) -> bool {
-        self.video_tx
-            .as_ref()
-            .map(|tx| tx.try_send(frame).is_ok())
-            .unwrap_or(false)
+        self.video_tx.as_ref().map(|tx| tx.try_send(frame).is_ok()).unwrap_or(false)
     }
 
     pub fn ended(&self) -> bool {
@@ -420,8 +302,7 @@ impl Output {
     /// Arrêt propre : FFmpeg termine le fichier (en-têtes, index) avant de quitter.
     pub fn stop(mut self) {
         self.video_tx.take();
-        self.audio_stop
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.audio_stop.store(true, std::sync::atomic::Ordering::Relaxed);
         let child = self.child.clone();
         std::thread::spawn(move || {
             let deadline = Instant::now() + Duration::from_secs(8);
@@ -441,10 +322,7 @@ impl Output {
 
 /// Horodatage local pour le nom des enregistrements (AAAA-MM-JJ HH-MM-SS).
 fn chrono_like_now() -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
     let offset = local_offset_secs();
     let t = secs + offset;
     let days = t.div_euclid(86400);
@@ -460,12 +338,7 @@ fn chrono_like_now() -> String {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if m <= 2 { y + 1 } else { y };
-    format!(
-        "{y:04}-{m:02}-{d:02} {:02}-{:02}-{:02}",
-        rem / 3600,
-        rem % 3600 / 60,
-        rem % 60
-    )
+    format!("{y:04}-{m:02}-{d:02} {:02}-{:02}-{:02}", rem / 3600, rem % 3600 / 60, rem % 60)
 }
 
 #[cfg(windows)]
@@ -478,10 +351,7 @@ fn local_offset_secs() -> i64 {
     unsafe extern "system" {
         fn GetTimeZoneInformation(tzi: *mut Tzi) -> u32;
     }
-    let mut tzi = Tzi {
-        bias: 0,
-        _rest: [0; 168],
-    };
+    let mut tzi = Tzi { bias: 0, _rest: [0; 168] };
     let r = unsafe { GetTimeZoneInformation(&mut tzi) };
     // Biais en minutes (UTC = local + biais) ; l'heure d'été ajoute -60 min quand elle est active.
     let mut bias = tzi.bias as i64;

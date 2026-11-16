@@ -53,11 +53,7 @@ fn blend(to: &[DrawItem], run: &TransitionRun, width: f32) -> Option<Vec<DrawIte
     if p >= 1.0 || run.kind == TransitionKind::Cut {
         return None;
     }
-    let e = if p < 0.5 {
-        4.0 * p * p * p
-    } else {
-        1.0 - (-2.0 * p + 2.0).powi(3) / 2.0
-    }; // accélération douce
+    let e = if p < 0.5 { 4.0 * p * p * p } else { 1.0 - (-2.0 * p + 2.0).powi(3) / 2.0 }; // accélération douce
     let mut out: Vec<DrawItem> = to.to_vec();
     let mut from: Vec<DrawItem> = run.from.clone();
     match run.kind {
@@ -126,12 +122,7 @@ impl Engine {
                         next += period * missed as u32;
                     }
 
-                    let frames: HashMap<u64, Arc<Frame>> = shared
-                        .slots
-                        .lock()
-                        .iter()
-                        .filter_map(|(id, s)| s.get().map(|f| (*id, f)))
-                        .collect();
+                    let frames: HashMap<u64, Arc<Frame>> = shared.slots.lock().iter().filter_map(|(id, s)| s.get().map(|f| (*id, f))).collect();
                     {
                         let mut sizes = shared.sizes.lock();
                         for (id, f) in &frames {
@@ -142,20 +133,13 @@ impl Engine {
                     let nv12 = {
                         let items = shared.items.lock();
                         let mut tr = shared.transition.lock();
-                        let blended = tr
-                            .as_ref()
-                            .and_then(|run| blend(&items, run, comp.width as f32));
+                        let blended = tr.as_ref().and_then(|run| blend(&items, run, comp.width as f32));
                         if blended.is_none() {
                             *tr = None;
                         }
                         drop(tr);
                         let studio = shared.studio.lock();
-                        comp.render(
-                            blended.as_deref().unwrap_or(&items),
-                            studio.as_deref(),
-                            &frames,
-                            live,
-                        )
+                        comp.render(blended.as_deref().unwrap_or(&items), studio.as_deref(), &frames, live)
                     };
                     if live {
                         // Une image par période, toujours : si la relecture n'est pas prête,
@@ -167,7 +151,8 @@ impl Engine {
                             let outputs = shared.outputs.lock();
                             let mut dropped = 0;
                             for out in outputs.values() {
-                                if !out.push(f.clone()) {
+                                // Les 2 premières secondes, FFmpeg démarre : les images refusées ne sont pas des pertes.
+                                if !out.push(f.clone()) && out.started.elapsed() > Duration::from_secs(2) {
                                     dropped += 1;
                                 }
                             }
@@ -192,10 +177,7 @@ impl Engine {
                 }
             })
             .expect("fil de rendu");
-        Self {
-            stop,
-            thread: Some(thread),
-        }
+        Self { stop, thread: Some(thread) }
     }
 }
 

@@ -186,10 +186,7 @@ impl Compositor {
         // NV12 : dimensions paires obligatoires.
         let width = width.max(2) & !1;
         let height = height.max(2) & !1;
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("compositeur"),
-            source: wgpu::ShaderSource::Wgsl(SHADER.into()),
-        });
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("compositeur"), source: wgpu::ShaderSource::Wgsl(SHADER.into()) });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("texture"),
             entries: &[
@@ -229,16 +226,9 @@ impl Compositor {
             bind_group_layouts: &[Some(&layout), Some(&params_layout)],
             immediate_size: 0,
         });
-        let full_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: None,
-            bind_group_layouts: &[Some(&layout)],
-            immediate_size: 0,
-        });
-        let pipeline = |vs: &str,
-                        fs: &str,
-                        format: wgpu::TextureFormat,
-                        blend: Option<wgpu::BlendState>,
-                        quad: bool| {
+        let full_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[Some(&layout)], immediate_size: 0 });
+        let pipeline = |vs: &str, fs: &str, format: wgpu::TextureFormat, blend: Option<wgpu::BlendState>, quad: bool| {
             let attrs = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2];
             let buffers = [Some(wgpu::VertexBufferLayout {
                 array_stride: std::mem::size_of::<Vertex>() as u64,
@@ -254,54 +244,27 @@ impl Compositor {
                     compilation_options: Default::default(),
                     buffers: if quad { &buffers } else { &[] },
                 },
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    ..Default::default()
-                },
+                primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() },
                 depth_stencil: None,
                 multisample: wgpu::MultisampleState::default(),
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
                     entry_point: Some(fs),
                     compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format,
-                        blend,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
+                    targets: &[Some(wgpu::ColorTargetState { format, blend, write_mask: wgpu::ColorWrites::ALL })],
                 }),
                 multiview_mask: None,
                 cache: None,
             })
         };
-        let quad_pipeline = pipeline(
-            "vs_quad",
-            "fs_quad",
-            wgpu::TextureFormat::Rgba8Unorm,
-            Some(wgpu::BlendState::ALPHA_BLENDING),
-            true,
-        );
+        let quad_pipeline = pipeline("vs_quad", "fs_quad", wgpu::TextureFormat::Rgba8Unorm, Some(wgpu::BlendState::ALPHA_BLENDING), true);
         let y_pipeline = pipeline("vs_full", "fs_y", wgpu::TextureFormat::R8Unorm, None, false);
-        let uv_pipeline = pipeline(
-            "vs_full",
-            "fs_uv",
-            wgpu::TextureFormat::Rg8Unorm,
-            None,
-            false,
-        );
+        let uv_pipeline = pipeline("vs_full", "fs_uv", wgpu::TextureFormat::Rg8Unorm, None, false);
 
-        let texture = |label: &str,
-                       w: u32,
-                       h: u32,
-                       format: wgpu::TextureFormat,
-                       usage: wgpu::TextureUsages| {
+        let texture = |label: &str, w: u32, h: u32, format: wgpu::TextureFormat, usage: wgpu::TextureUsages| {
             device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),
-                size: wgpu::Extent3d {
-                    width: w,
-                    height: h,
-                    depth_or_array_layers: 1,
-                },
+                size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
@@ -310,33 +273,16 @@ impl Compositor {
                 view_formats: &[],
             })
         };
-        let canvas_usage = wgpu::TextureUsages::RENDER_ATTACHMENT
-            | wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::COPY_SRC;
+        let canvas_usage = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC;
         let target = |label: &str| {
-            let t = texture(
-                label,
-                width,
-                height,
-                wgpu::TextureFormat::Rgba8Unorm,
-                canvas_usage,
-            );
-            Target {
-                view: t.create_view(&Default::default()),
-                _texture: t,
-            }
+            let t = texture(label, width, height, wgpu::TextureFormat::Rgba8Unorm, canvas_usage);
+            Target { view: t.create_view(&Default::default()), _texture: t }
         };
         let program = target("antenne");
         let studio = target("aperçu studio");
         let nv12 = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC;
         let y_tex = texture("Y", width, height, wgpu::TextureFormat::R8Unorm, nv12);
-        let uv_tex = texture(
-            "UV",
-            width / 2,
-            height / 2,
-            wgpu::TextureFormat::Rg8Unorm,
-            nv12,
-        );
+        let uv_tex = texture("UV", width / 2, height / 2, wgpu::TextureFormat::Rg8Unorm, nv12);
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("bilinéaire"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -349,14 +295,8 @@ impl Compositor {
             label: Some("antenne"),
             layout: &layout,
             entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&program.view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&program.view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
             ],
         });
         let params = device.create_buffer(&wgpu::BufferDescriptor {
@@ -437,19 +377,11 @@ impl Compositor {
 
     /// Envoie la dernière image d'une source à la carte graphique, si elle a changé.
     fn upload(&mut self, id: u64, frame: &Frame) {
-        let stale = self
-            .sources
-            .get(&id)
-            .map(|s| s.width != frame.width || s.height != frame.height)
-            .unwrap_or(true);
+        let stale = self.sources.get(&id).map(|s| s.width != frame.width || s.height != frame.height).unwrap_or(true);
         if stale {
             let texture = self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("source"),
-                size: wgpu::Extent3d {
-                    width: frame.width,
-                    height: frame.height,
-                    depth_or_array_layers: 1,
-                },
+                size: wgpu::Extent3d { width: frame.width, height: frame.height, depth_or_array_layers: 1 },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
@@ -462,26 +394,11 @@ impl Compositor {
                 label: Some("source"),
                 layout: &self.layout,
                 entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&self.sampler),
-                    },
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
                 ],
             });
-            self.sources.insert(
-                id,
-                SourceTexture {
-                    texture,
-                    bind,
-                    width: frame.width,
-                    height: frame.height,
-                    seq: 0,
-                },
-            );
+            self.sources.insert(id, SourceTexture { texture, bind, width: frame.width, height: frame.height, seq: 0 });
         }
         let src = self.sources.get_mut(&id).unwrap();
         if src.seq == frame.seq {
@@ -489,23 +406,10 @@ impl Compositor {
         }
         src.seq = frame.seq;
         self.queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &src.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
+            wgpu::TexelCopyTextureInfo { texture: &src.texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
             &frame.data,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(frame.width * 4),
-                rows_per_image: Some(frame.height),
-            },
-            wgpu::Extent3d {
-                width: frame.width,
-                height: frame.height,
-                depth_or_array_layers: 1,
-            },
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(frame.width * 4), rows_per_image: Some(frame.height) },
+            wgpu::Extent3d { width: frame.width, height: frame.height, depth_or_array_layers: 1 },
         );
     }
 
@@ -515,12 +419,7 @@ impl Compositor {
     }
 
     /// Prépare les sommets et paramètres d'une liste ; renvoie les dessins (source, n° de quad).
-    fn prepare(
-        &self,
-        items: &[DrawItem],
-        verts: &mut Vec<Vertex>,
-        params: &mut Vec<Params>,
-    ) -> Vec<(u64, u32)> {
+    fn prepare(&self, items: &[DrawItem], verts: &mut Vec<Vertex>, params: &mut Vec<Params>) -> Vec<(u64, u32)> {
         let (w, h) = (self.width as f32, self.height as f32);
         let mut draws = Vec::new();
         // Du dernier élément (arrière-plan) au premier (premier plan).
@@ -553,30 +452,12 @@ impl Compositor {
             let y0 = 1.0 - item.y / h * 2.0;
             let y1 = 1.0 - (item.y + item.h) / h * 2.0;
             verts.extend_from_slice(&[
-                Vertex {
-                    pos: [x0, y0],
-                    uv: [u0, v0],
-                },
-                Vertex {
-                    pos: [x1, y0],
-                    uv: [u1, v0],
-                },
-                Vertex {
-                    pos: [x0, y1],
-                    uv: [u0, v1],
-                },
-                Vertex {
-                    pos: [x0, y1],
-                    uv: [u0, v1],
-                },
-                Vertex {
-                    pos: [x1, y0],
-                    uv: [u1, v0],
-                },
-                Vertex {
-                    pos: [x1, y1],
-                    uv: [u1, v1],
-                },
+                Vertex { pos: [x0, y0], uv: [u0, v0] },
+                Vertex { pos: [x1, y0], uv: [u1, v0] },
+                Vertex { pos: [x0, y1], uv: [u0, v1] },
+                Vertex { pos: [x0, y1], uv: [u0, v1] },
+                Vertex { pos: [x1, y0], uv: [u1, v0] },
+                Vertex { pos: [x1, y1], uv: [u1, v1] },
             ]);
             let k = f.chroma_color.map(|c| c as f32 / 255.0);
             params.push(Params {
@@ -597,10 +478,7 @@ impl Compositor {
                 view,
                 depth_slice: None,
                 resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: wgpu::StoreOp::Store,
-                },
+                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
             })],
             ..Default::default()
         });
@@ -608,11 +486,7 @@ impl Compositor {
         pass.set_vertex_buffer(0, self.vertices.slice(..));
         for (id, n) in draws {
             pass.set_bind_group(0, &self.sources[id].bind, &[]);
-            pass.set_bind_group(
-                1,
-                &self.params_bind,
-                &[n * std::mem::size_of::<Params>() as u32],
-            );
+            pass.set_bind_group(1, &self.params_bind, &[n * std::mem::size_of::<Params>() as u32]);
             pass.draw(n * 6..n * 6 + 6, 0..1);
         }
     }
@@ -620,13 +494,7 @@ impl Compositor {
     /// Compose une image (et l'aperçu du mode studio s'il est fourni). Avec `readback`,
     /// convertit l'image à l'antenne en NV12 et lance sa relecture ; renvoie
     /// l'image NV12 la plus récente déjà relue, s'il y en a une.
-    pub fn render(
-        &mut self,
-        program: &[DrawItem],
-        studio: Option<&[DrawItem]>,
-        frames: &HashMap<u64, Arc<Frame>>,
-        readback: bool,
-    ) -> Option<Vec<u8>> {
+    pub fn render(&mut self, program: &[DrawItem], studio: Option<&[DrawItem]>, frames: &HashMap<u64, Arc<Frame>>, readback: bool) -> Option<Vec<u8>> {
         for item in program.iter().chain(studio.unwrap_or(&[])) {
             if let Some(f) = frames.get(&item.source) {
                 self.upload(item.source, f);
@@ -637,17 +505,11 @@ impl Compositor {
         let program_draws = self.prepare(program, &mut verts, &mut params);
         let studio_draws = studio.map(|s| self.prepare(s, &mut verts, &mut params));
         if !verts.is_empty() {
-            self.queue
-                .write_buffer(&self.vertices, 0, bytemuck::cast_slice(&verts));
-            self.queue
-                .write_buffer(&self.params, 0, bytemuck::cast_slice(&params));
+            self.queue.write_buffer(&self.vertices, 0, bytemuck::cast_slice(&verts));
+            self.queue.write_buffer(&self.params, 0, bytemuck::cast_slice(&params));
         }
 
-        let mut enc = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("image"),
-            });
+        let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("image") });
         self.pass(&mut enc, &self.program.view, &program_draws);
         if let Some(d) = &studio_draws {
             self.pass(&mut enc, &self.studio.view, d);
@@ -656,26 +518,15 @@ impl Compositor {
         // Relecture : un tampon libre parmi trois (l'image arrive avec 1 à 2 images de retard,
         // sans jamais attendre la carte graphique).
         let mut submitted = None;
-        if readback
-            && let Some(slot) = self
-                .readbacks
-                .iter()
-                .position(|r| r.state.load(Ordering::Acquire) == FREE)
-        {
-            for (view, pipeline) in [
-                (&self.y_view, &self.y_pipeline),
-                (&self.uv_view, &self.uv_pipeline),
-            ] {
+        if readback && let Some(slot) = self.readbacks.iter().position(|r| r.state.load(Ordering::Acquire) == FREE) {
+            for (view, pipeline) in [(&self.y_view, &self.y_pipeline), (&self.uv_view, &self.uv_pipeline)] {
                 let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("NV12"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view,
                         depth_slice: None,
                         resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                            store: wgpu::StoreOp::Store,
-                        },
+                        ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
                     })],
                     ..Default::default()
                 });
@@ -684,50 +535,15 @@ impl Compositor {
                 pass.draw(0..3, 0..1);
             }
             let buffer = &self.readbacks[slot].buffer;
-            let copy = |enc: &mut wgpu::CommandEncoder,
-                        tex: &wgpu::Texture,
-                        offset: u64,
-                        stride: u32,
-                        w: u32,
-                        h: u32| {
+            let copy = |enc: &mut wgpu::CommandEncoder, tex: &wgpu::Texture, offset: u64, stride: u32, w: u32, h: u32| {
                 enc.copy_texture_to_buffer(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: tex,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::TexelCopyBufferInfo {
-                        buffer,
-                        layout: wgpu::TexelCopyBufferLayout {
-                            offset,
-                            bytes_per_row: Some(stride),
-                            rows_per_image: Some(h),
-                        },
-                    },
-                    wgpu::Extent3d {
-                        width: w,
-                        height: h,
-                        depth_or_array_layers: 1,
-                    },
+                    wgpu::TexelCopyTextureInfo { texture: tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                    wgpu::TexelCopyBufferInfo { buffer, layout: wgpu::TexelCopyBufferLayout { offset, bytes_per_row: Some(stride), rows_per_image: Some(h) } },
+                    wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
                 );
             };
-            copy(
-                &mut enc,
-                &self.y_tex,
-                0,
-                self.y_stride,
-                self.width,
-                self.height,
-            );
-            copy(
-                &mut enc,
-                &self.uv_tex,
-                (self.y_stride * self.height) as u64,
-                self.uv_stride,
-                self.width / 2,
-                self.height / 2,
-            );
+            copy(&mut enc, &self.y_tex, 0, self.y_stride, self.width, self.height);
+            copy(&mut enc, &self.uv_tex, (self.y_stride * self.height) as u64, self.uv_stride, self.width / 2, self.height / 2);
             submitted = Some(slot);
         }
         self.queue.submit([enc.finish()]);
@@ -735,11 +551,7 @@ impl Compositor {
             let r = &self.readbacks[slot];
             r.state.store(PENDING, Ordering::Release);
             let state = r.state.clone();
-            r.buffer
-                .slice(..)
-                .map_async(wgpu::MapMode::Read, move |res| {
-                    state.store(if res.is_ok() { READY } else { FREE }, Ordering::Release)
-                });
+            r.buffer.slice(..).map_async(wgpu::MapMode::Read, move |res| state.store(if res.is_ok() { READY } else { FREE }, Ordering::Release));
             self.in_flight.push_back(slot);
         }
         let _ = self.device.poll(wgpu::PollType::Poll);

@@ -51,12 +51,7 @@ pub struct Converter {
 
 impl Converter {
     pub fn new(channels: usize, rate: u32) -> Self {
-        Self {
-            channels: channels.max(1),
-            ratio: rate as f64 / RATE as f64,
-            pos: 0.0,
-            last: [0.0; 2],
-        }
+        Self { channels: channels.max(1), ratio: rate as f64 / RATE as f64, pos: 0.0, last: [0.0; 2] }
     }
 
     pub fn convert(&mut self, input: &[f32], out: &mut Vec<f32>) {
@@ -91,17 +86,10 @@ impl Converter {
 }
 
 /// Ouvre un appareil cpal (entrée, ou sortie en boucle WASAPI) vers une piste.
-fn open_device(
-    track: Arc<Track>,
-    name: &str,
-    device: Option<cpal::Device>,
-) -> Option<cpal::Stream> {
+fn open_device(track: Arc<Track>, name: &str, device: Option<cpal::Device>) -> Option<cpal::Stream> {
     let result = (|| -> Result<cpal::Stream, String> {
         let device = device.ok_or("aucun appareil trouvé")?;
-        let config = device
-            .default_input_config()
-            .or_else(|_| device.default_output_config())
-            .map_err(|e| e.to_string())?;
+        let config = device.default_input_config().or_else(|_| device.default_output_config()).map_err(|e| e.to_string())?;
         let format = config.sample_format();
         let config: cpal::StreamConfig = config.into();
         let mut conv = Converter::new(config.channels as usize, config.sample_rate);
@@ -161,24 +149,12 @@ impl Mixer {
         *mic.gain.lock() = (1.0, false);
         *desktop.gain.lock() = (1.0, false);
         let mut streams = Vec::new();
-        streams.extend(open_device(
-            mic.clone(),
-            "Micro",
-            host.default_input_device(),
-        ));
+        streams.extend(open_device(mic.clone(), "Micro", host.default_input_device()));
         // Sortie ouverte en entrée : WASAPI capture tout ce que le PC joue (boucle).
-        streams.extend(open_device(
-            desktop.clone(),
-            "Son du bureau",
-            host.default_output_device(),
-        ));
+        streams.extend(open_device(desktop.clone(), "Son du bureau", host.default_output_device()));
         tracks.lock().insert(MIC, mic);
         tracks.lock().insert(DESKTOP, desktop);
-        let mixer = Self {
-            tracks,
-            sinks: Arc::default(),
-            _streams: streams,
-        };
+        let mixer = Self { tracks, sinks: Arc::default(), _streams: streams };
         mixer.spawn();
         mixer
     }
@@ -202,9 +178,7 @@ impl Mixer {
 
     /// Retire les pistes des sources qui n'existent plus.
     pub fn retain(&self, alive: impl Fn(u64) -> bool) {
-        self.tracks
-            .lock()
-            .retain(|id, _| *id == MIC || *id == DESKTOP || alive(*id));
+        self.tracks.lock().retain(|id, _| *id == MIC || *id == DESKTOP || alive(*id));
     }
 
     /// Reçoit le mixage (blocs de 10 ms, stéréo entrelacée, 48 kHz).
@@ -245,12 +219,7 @@ impl Mixer {
                     }
                     let block = Arc::new(mix);
                     // Sortie trop lente : bloc perdu pour elle ; sortie fermée : retirée.
-                    sinks.lock().retain(|tx| {
-                        !matches!(
-                            tx.try_send(block.clone()),
-                            Err(crossbeam_channel::TrySendError::Disconnected(_))
-                        )
-                    });
+                    sinks.lock().retain(|tx| !matches!(tx.try_send(block.clone()), Err(crossbeam_channel::TrySendError::Disconnected(_))));
                     // Cadence fixe de 10 ms, sans dérive.
                     let now = Instant::now();
                     if next > now {
