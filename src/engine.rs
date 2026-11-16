@@ -4,6 +4,7 @@
 
 use crate::capture::{Frame, Slot};
 use crate::compositor::{Compositor, DrawItem};
+use crate::model::TransitionKind;
 use crate::output::{Kind, Output};
 use parking_lot::Mutex;
 use std::collections::HashMap;
@@ -26,12 +27,49 @@ pub struct EngineStats {
 pub struct Shared {
     /// Éléments à dessiner (scène à l'antenne), mis à jour par l'interface.
     pub items: Mutex<Vec<DrawItem>>,
+    /// Scène en préparation (mode studio), dessinée dans une seconde texture.
+    pub studio: Mutex<Option<Vec<DrawItem>>>,
+    /// Transition en cours vers la scène à l'antenne.
+    pub transition: Mutex<Option<TransitionRun>>,
     /// Dernière image de chaque source.
     pub slots: Mutex<HashMap<u64, Slot>>,
     /// Taille de chaque source (pour placer les éléments dans l'interface).
     pub sizes: Mutex<HashMap<u64, (u32, u32)>>,
     pub outputs: Mutex<HashMap<KindKey, Output>>,
     pub stats: Mutex<EngineStats>,
+}
+
+/// Transition : la scène précédente (figée au moment du changement) laisse place à la nouvelle.
+pub struct TransitionRun {
+    pub from: Vec<DrawItem>,
+    pub kind: TransitionKind,
+    pub start: Instant,
+    pub duration: Duration,
+}
+
+/// Liste à dessiner pendant une transition (premier plan en tête de liste).
+fn blend(to: &[DrawItem], run: &TransitionRun, width: f32) -> Option<Vec<DrawItem>> {
+    let p = run.start.elapsed().as_secs_f32() / run.duration.as_secs_f32().max(0.001);
+    if p >= 1.0 || run.kind == TransitionKind::Cut {
+        return None;
+    }
+    let e = if p < 0.5 {
+        4.0 * p * p * p
+    } else {
+        1.0 - (-2.0 * p + 2.0).powi(3) / 2.0
+    }; // accélération douce
+    let mut out: Vec<DrawItem> = to.to_vec();
+    let mut from: Vec<DrawItem> = run.from.clone();
+    match run.kind {
+        TransitionKind::Fade => out.iter_mut().for_each(|i| i.alpha *= p),
+        TransitionKind::Slide => {
+            from.iter_mut().for_each(|i| i.x -= e * width);
+            out.iter_mut().for_each(|i| i.x += (1.0 - e) * width);
+        }
+        TransitionKind::Cut => {}
+    }
+    out.extend(from);
+    Some(out)
 }
 
 pub type KindKey = u8;
@@ -103,7 +141,21 @@ impl Engine {
                     let live = !shared.outputs.lock().is_empty();
                     let nv12 = {
                         let items = shared.items.lock();
-                        comp.render(&items, &frames, live)
+                        let mut tr = shared.transition.lock();
+                        let blended = tr
+                            .as_ref()
+                            .and_then(|run| blend(&items, run, comp.width as f32));
+                        if blended.is_none() {
+                            *tr = None;
+                        }
+                        drop(tr);
+                        let studio = shared.studio.lock();
+                        comp.render(
+                            blended.as_deref().unwrap_or(&items),
+                            studio.as_deref(),
+                            &frames,
+                            live,
+                        )
                     };
                     if live {
                         // Une image par période, toujours : si la relecture n'est pas prête,

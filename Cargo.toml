@@ -21,6 +21,8 @@ egui-wgpu = "0.37.0"
 egui_extras = "0.37.0"
 env_logger = "0.11.11"
 epaint = { version = "0.37", features = ["monochrome_emoji_fonts"] }
+epaint_default_fonts = "0.37"
+fontdue = "0.9.5"
 image = "0.25.10"
 log = "0.4.35"
 parking_lot = "0.13.0"
@@ -32,6 +34,8 @@ wgpu = "30"
 
 [target.'cfg(windows)'.dependencies]
 windows-capture = "*"
+wasapi = "*"
+windows = { version = "*", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_System_Threading", "Win32_System_ProcessStatus", "Win32_System_Diagnostics_ToolHelp"] }
 
 [target.'cfg(not(windows))'.dependencies]
 xcap = "*"
