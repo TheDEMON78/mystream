@@ -34,7 +34,11 @@ jobs:
       - name: Installateur
         shell: pwsh
         run: |
-          & "${env:ProgramFiles(x86)}\NSIS\makensis.exe" /DVERSION=0.1.${{ github.run_number }} installer\mystream.nsi
+          # NSIS n'est plus préinstallé sur les machines Windows de GitHub.
+          $nsis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
+          if (-not (Test-Path $nsis)) { choco install nsis -y --no-progress | Out-Null }
+          & $nsis /DVERSION=0.1.${{ github.run_number }} installer\mystream.nsi
+          if (-not (Test-Path MyStream-natif-setup.exe)) { throw "Installateur non créé" }
       - name: Publier la préversion
         uses: softprops/action-gh-release@v2
         with:
