@@ -285,6 +285,17 @@ impl App {
         if let Some(text) = self.update_message() {
             hint(ui, &text);
         }
+        section(ui, "Version Electron");
+        hint(ui, "Reprend le chat (Twitch et Kick en direct, ou Restream) et les réglages Restream de MyStream (version Electron). Validez ensuite avec OK.");
+        if ui.button("Reprendre les réglages de la version Electron").clicked() {
+            match crate::model::electron_config() {
+                Some(e) => {
+                    crate::model::import_electron(&mut self.draft, &e["settings"]);
+                    self.notify(format!("Réglages repris : chat « {} ». Cliquez sur OK pour les garder.", self.draft.chat.mode), false);
+                }
+                None => self.notify("Version Electron introuvable sur ce PC.", true),
+            }
+        }
     }
 
     fn tab_stream(&mut self, ui: &mut egui::Ui) {

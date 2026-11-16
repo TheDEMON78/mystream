@@ -105,7 +105,7 @@ pub struct ChatSettings {
 
 impl Default for ChatSettings {
     fn default() -> Self {
-        Self { mode: "restream".into(), twitch_channel: String::new(), kick_channel: String::new() }
+        Self { mode: "off".into(), twitch_channel: String::new(), kick_channel: String::new() }
     }
 }
 
@@ -159,6 +159,8 @@ pub struct Settings {
     pub chat: ChatSettings,
     /// Mises à jour installées automatiquement (jamais pendant un live).
     pub auto_update: bool,
+    /// Réglages de la version Electron déjà repris (une seule fois).
+    pub electron_imported: bool,
 }
 
 impl Default for Settings {
@@ -177,6 +179,7 @@ impl Default for Settings {
             restream: RestreamSettings::default(),
             chat: ChatSettings::default(),
             auto_update: true,
+            electron_imported: false,
         }
     }
 }
@@ -531,6 +534,14 @@ impl Project {
         if p.scene(p.preview).is_none() {
             p.preview = p.current;
         }
+        // Réglages de la version Electron (chat, Restream) repris au premier lancement.
+        if !p.settings.electron_imported {
+            p.settings.electron_imported = true;
+            if let Some(e) = electron_config() {
+                import_electron(&mut p.settings, &e["settings"]);
+                log::info!("Réglages de la version Electron repris (chat : {})", p.settings.chat.mode);
+            }
+        }
         // Ancien réglage « Twitch en direct » : devenu « Direct (Twitch + Kick) ».
         if p.settings.chat.mode == "twitch" {
             p.settings.chat.mode = "direct".into();
@@ -689,6 +700,19 @@ impl Project {
 }
 
 #[cfg(test)]
+mod electron_tests {
+    #[test]
+    fn reprend_le_chat_direct() {
+        let mut s = super::Settings::default();
+        let e = serde_json::json!({ "chat": { "mode": "direct", "twitchChannel": "bloop", "kickChannel": "bloop_k" }, "restream": { "url": "http://localhost:3050", "allowSelfSigned": true }, "stream": { "service": "restream" } });
+        super::import_electron(&mut s, &e);
+        assert_eq!((s.chat.mode.as_str(), s.chat.twitch_channel.as_str(), s.chat.kick_channel.as_str()), ("direct", "bloop", "bloop_k"));
+        assert_eq!(s.stream.service, "restream");
+        assert!(s.restream.allow_self_signed);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     #[test]
     fn lit_le_projet_de_test() {
@@ -701,10 +725,43 @@ mod tests {
     }
 }
 
+/// Configuration de la version Electron, si elle est installée.
+pub fn electron_config() -> Option<serde_json::Value> {
+    let path = dirs::config_dir()?.join("MyStream").join("config.json");
+    serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+}
+
+/// Reprend le chat (mode, chaînes) et Restream de la version Electron.
+pub fn import_electron(s: &mut Settings, e: &serde_json::Value) {
+    let text = |v: &serde_json::Value| v.as_str().unwrap_or("").to_string();
+    let c = &e["chat"];
+    if let Some(mode) = c["mode"].as_str().filter(|m| ["off", "restream", "direct"].contains(m)) {
+        s.chat.mode = mode.to_string();
+    }
+    s.chat.twitch_channel = text(&c["twitchChannel"]);
+    s.chat.kick_channel = text(&c["kickChannel"]);
+    let r = &e["restream"];
+    if r.is_object() {
+        s.restream.url = text(&r["url"]);
+        s.restream.password = text(&r["password"]);
+        s.restream.rtmp_url = text(&r["rtmpUrl"]);
+        s.restream.allow_self_signed = r["allowSelfSigned"].as_bool().unwrap_or(false);
+    }
+    let st = &e["stream"];
+    match st["service"].as_str() {
+        Some("restream") => s.stream.service = "restream".into(),
+        Some(_) if !text(&st["key"]).is_empty() => {
+            s.stream.service = "custom".into();
+            s.stream.server = text(&st["server"]);
+            s.stream.key = text(&st["key"]);
+        }
+        _ => {}
+    }
+}
+
 /// Mot de passe et port du contrôle à distance de la version Electron, s'il est installé.
 fn electron_remote() -> Option<(String, u16)> {
-    let path = dirs::config_dir()?.join("MyStream").join("config.json");
-    let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+    let v = electron_config()?;
     let r = &v["settings"]["remote"];
     let password = r["password"].as_str().filter(|p| !p.is_empty())?.to_string();
     Some((password, r["port"].as_u64().and_then(|p| u16::try_from(p).ok()).unwrap_or(4455)))
