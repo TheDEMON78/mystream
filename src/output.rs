@@ -173,12 +173,12 @@ impl Output {
         let size = format!("{width}x{height}");
         let rate = fps.to_string();
         args.extend(
-            ["-f", "rawvideo", "-pix_fmt", "nv12", "-video_size", &size, "-framerate", &rate, "-thread_queue_size", "64", "-i", "pipe:0"]
+            ["-f", "rawvideo", "-pix_fmt", "nv12", "-video_size", &size, "-framerate", &rate, "-i", "pipe:0"]
                 .into_iter()
                 .map(String::from),
         );
         let audio_url = format!("tcp://127.0.0.1:{port}");
-        args.extend(["-f", "f32le", "-ar", "48000", "-ac", "2", "-thread_queue_size", "1024", "-i", &audio_url].into_iter().map(String::from));
+        args.extend(["-f", "f32le", "-ar", "48000", "-ac", "2", "-i", &audio_url].into_iter().map(String::from));
         args.extend(["-map", "0:v", "-map", "1:a"].into_iter().map(String::from));
         let (target, file) = match kind {
             Kind::Stream => {
