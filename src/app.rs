@@ -1136,6 +1136,10 @@ impl App {
                 self.add(&name, SourceKind::Media { path: path.to_string_lossy().into_owned(), looping: true });
             }
         }
+        if cfg!(windows) && ui.button("🌐 Navigateur (alertes, widgets)").on_hover_text("Page web transparente : alertes Streamlabs, StreamElements, widgets…").clicked() {
+            ui.close();
+            self.add("Navigateur", SourceKind::Browser { url: String::new(), width: 800, height: 600, css: crate::model::browser_css(), audio: true });
+        }
         if ui.button("💬 Chat (incrusté dans le stream)").clicked() {
             ui.close();
             self.add("Chat", SourceKind::Chat { width: 420, height: 600, size: 22.0, background: [0, 0, 0, 0], max_messages: 15 });
@@ -1292,6 +1296,36 @@ impl App {
                     changed |= color(ui, background);
                 });
                 ui.label(RichText::new("Le chat vient de Restream ou de Twitch (Paramètres > Chat).").small().color(theme::MUTED));
+            }
+            SourceKind::Browser { url, width, height, css, audio } => {
+                // La page n'est rechargée qu'une fois la saisie terminée.
+                ui.label("Adresse (ou fichier local)");
+                ui.horizontal(|ui| {
+                    let r = ui.add(egui::TextEdit::singleline(url).hint_text("https://…").desired_width(ui.available_width() - 70.0));
+                    changed |= r.lost_focus();
+                    if ui.button("Fichier…").clicked()
+                        && let Some(p) = rfd::FileDialog::new().add_filter("Pages web", &["html", "htm"]).pick_file()
+                    {
+                        *url = p.to_string_lossy().into_owned();
+                        changed = true;
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Taille");
+                    changed |= ui.add(egui::DragValue::new(width).range(16..=3840).suffix(" px")).changed();
+                    ui.label("×");
+                    changed |= ui.add(egui::DragValue::new(height).range(16..=2160).suffix(" px")).changed();
+                });
+                ui.label("CSS personnalisé");
+                changed |= ui.add(egui::TextEdit::multiline(css).code_editor().desired_rows(3)).lost_focus();
+                changed |= ui.checkbox(audio, "Capturer le son de la page").changed();
+                ui.horizontal(|ui| {
+                    ui.label(format!("{fps:.0} images/s capturées"));
+                    if ui.button("⟳ Recharger la page").clicked() {
+                        // Une modification relance la source, donc recharge la page.
+                        changed = true;
+                    }
+                });
             }
         }
         if !src.kind.audio_only() {

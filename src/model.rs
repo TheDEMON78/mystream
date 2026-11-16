@@ -215,6 +215,21 @@ pub enum SourceKind {
     AppAudio { exe: String },
     /// Chat du live incrusté dans l'image.
     Chat { width: u32, height: u32, size: f32, background: [u8; 4], max_messages: u32 },
+    /// Page web (alertes, widgets) avec sa transparence et son son.
+    Browser {
+        url: String,
+        width: u32,
+        height: u32,
+        #[serde(default = "browser_css")]
+        css: String,
+        #[serde(default = "yes")]
+        audio: bool,
+    },
+}
+
+/// CSS ajouté aux pages, comme celui d'OBS : fond transparent, sans barres de défilement.
+pub fn browser_css() -> String {
+    "body { background-color: rgba(0, 0, 0, 0); margin: 0px auto; overflow: hidden; }".into()
 }
 
 fn yes() -> bool {
@@ -234,6 +249,7 @@ impl SourceKind {
             SourceKind::Camera { .. } => "Caméra",
             SourceKind::AppAudio { .. } => "Son d'une application",
             SourceKind::Chat { .. } => "Chat",
+            SourceKind::Browser { .. } => "Navigateur",
         }
     }
     pub fn glyph(&self) -> &'static str {
@@ -248,12 +264,13 @@ impl SourceKind {
             SourceKind::Camera { .. } => "📷",
             SourceKind::AppAudio { .. } => "🎵",
             SourceKind::Chat { .. } => "💬",
+            SourceKind::Browser { .. } => "🌐",
         }
     }
     /// Sources qui produisent du son (piste dans le mixeur).
     pub fn has_audio(&self) -> bool {
         match self {
-            SourceKind::Window { audio, .. } | SourceKind::Game { audio } => *audio,
+            SourceKind::Window { audio, .. } | SourceKind::Game { audio } | SourceKind::Browser { audio, .. } => *audio,
             SourceKind::Media { .. } | SourceKind::AppAudio { .. } => true,
             _ => false,
         }

@@ -29,12 +29,15 @@ droits administrateur, raccourcis sur le bureau et dans le menu Démarrer), ou
 ## Fonctionnalités
 
 - **Scènes** : ajouter, supprimer, renommer, transitions (coupure, fondu,
-  glissement), **mode studio** (aperçu modifiable + bouton Transition).
+  glissement, **stinger** vidéo avec point de coupure), **mode studio** (aperçu modifiable + bouton Transition).
 - **Sources** :
   - capture de jeu **automatique** (plein écran ou fenêtré sans bordure,
     gardée pendant un alt-tab), avec le son du jeu ;
   - capture d'écran, capture de fenêtre (avec son), caméra ;
-  - image, couleur, texte, média (vidéo ou son, en boucle) ;
+  - image (GIF animés compris), couleur, texte, média (vidéo ou son, en
+    boucle ; WebM transparents) ;
+  - **navigateur** (alertes Streamlabs/StreamElements, widgets) : page web
+    WebView2 avec sa transparence, CSS personnalisé et son propre son ;
   - son d'une application seule (Discord…), même en arrière-plan ;
   - source partagée entre plusieurs scènes.
 - **Filtres** par source, sur la carte graphique : opacité, luminosité,
@@ -69,10 +72,9 @@ droits administrateur, raccourcis sur le bureau et dans le menu Démarrer), ou
 
 ## Ce qui manque encore (par rapport à la version Electron)
 
-1. Sources navigateur (alertes Streamlabs/StreamElements) : il faut intégrer
-   un moteur web (WebView2).
-2. Transitions « stinger » (vidéo) et images GIF animées.
-3. Capture sans aucune copie vers le processeur (texture partagée directement
+1. Interaction avec les pages des sources navigateur (clics, saisie), pour
+   se connecter à un service depuis la source.
+2. Capture sans aucune copie vers le processeur (texture partagée directement
    avec wgpu) et encodage NVENC depuis la carte graphique.
 
 ## Développement
@@ -90,6 +92,7 @@ Organisation du code (`src/`) :
 
 - `model.rs` : scènes, sources, réglages (JSON) ;
 - `capture.rs` : captures (Windows Graphics Capture ; xcap hors Windows), image, couleur ;
+- `capture/platform/browser.rs` : source navigateur (WebView2 hors écran, capture transparente, son).
 - `compositor.rs` : composition et conversion NV12 sur la carte graphique, relecture asynchrone ;
 - `engine.rs` : fil de rendu à cadence exacte, envoi aux sorties ;
 - `audio.rs` : micro et son du bureau (WASAPI), mixage 48 kHz ;

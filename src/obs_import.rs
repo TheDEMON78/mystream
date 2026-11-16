@@ -66,6 +66,13 @@ fn kind_of(src: &Value, project: &Project) -> Option<SourceKind> {
             fps: 30,
         },
         "wasapi_process_output_capture" => SourceKind::AppAudio { exe: s["window"].as_str().unwrap_or("").rsplit(':').next().unwrap_or("").to_string() },
+        "browser_source" => SourceKind::Browser {
+            url: if s["is_local_file"].as_bool().unwrap_or(false) { s["local_file"].as_str()?.to_string() } else { s["url"].as_str().unwrap_or("").to_string() },
+            width: s["width"].as_u64().unwrap_or(800) as u32,
+            height: s["height"].as_u64().unwrap_or(600) as u32,
+            css: s["css"].as_str().map(String::from).unwrap_or_else(crate::model::browser_css),
+            audio: s["reroute_audio"].as_bool().unwrap_or(true),
+        },
         _ => return None,
     })
 }
@@ -163,7 +170,6 @@ pub fn import(path: &Path, project: &mut Project) -> Result<Report, String> {
 /// Nom lisible d'un type de source OBS non pris en charge.
 pub fn obs_type_label(id: &str) -> String {
     match id {
-        "browser_source" => "navigateur".into(),
         "slideshow" | "slideshow_v2" => "diaporama".into(),
         "group" => "groupe".into(),
         other => other.to_string(),

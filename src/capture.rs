@@ -67,6 +67,9 @@ pub struct Status {
     children: Mutex<Vec<Child>>,
     /// La vidéo est arrivée à la fin (média lu une seule fois).
     pub ended: AtomicBool,
+    /// Images capturées en alpha prémultiplié (fenêtre transparente) : à convertir.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub premultiplied: AtomicBool,
 }
 
 impl Status {
@@ -127,6 +130,16 @@ impl Runtime {
             SourceKind::Chat { width, height, size, background, max_messages } => {
                 crate::overlay::start(chat.clone(), *width, *height, *size, *background, *max_messages, slot.clone(), status.clone())
             }
+            SourceKind::Browser { url, width, height, css, audio } => platform::start_browser(
+                url.clone(),
+                (*width).clamp(16, 3840),
+                (*height).clamp(16, 2160),
+                css.clone(),
+                fps,
+                slot.clone(),
+                status.clone(),
+                if *audio { track } else { None },
+            ),
             SourceKind::AppAudio { exe } => {
                 if let Some(t) = track {
                     platform::start_app_audio(exe.clone(), status.clone(), t);
@@ -443,6 +456,8 @@ pub struct MonitorInfo {
 #[cfg(windows)]
 mod platform {
     use super::*;
+    mod browser;
+    pub use browser::start_browser;
     use windows::Win32::Foundation::{CloseHandle, HWND, RECT};
     use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow};
     use windows::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS};
@@ -480,7 +495,17 @@ mod platform {
             }
             let buffer = frame.buffer()?;
             let (width, height) = (buffer.width(), buffer.height());
-            let data = buffer.as_nopadding_buffer(&mut self.scratch).to_vec();
+            let mut data = buffer.as_nopadding_buffer(&mut self.scratch).to_vec();
+            if self.status.premultiplied.load(Ordering::Relaxed) {
+                for p in data.chunks_exact_mut(4) {
+                    let a = p[3] as u32;
+                    if a > 0 && a < 255 {
+                        for c in &mut p[..3] {
+                            *c = ((*c as u32 * 255 + a / 2) / a).min(255) as u8;
+                        }
+                    }
+                }
+            }
             self.slot.set(Frame::new(width, height, data));
             self.status.frame();
             Ok(())
@@ -519,8 +544,9 @@ mod platform {
     }
 
     /// Capture d'une fenêtre jusqu'à ce qu'elle disparaisse ou que `alive` devienne faux.
-    fn capture_window(window: Window, fps: u32, slot: &Slot, status: &Arc<Status>, alive: impl Fn() -> bool) -> Result<(), String> {
+    fn capture_window(window: Window, fps: u32, slot: &Slot, status: &Arc<Status>, premultiplied: bool, alive: impl Fn() -> bool) -> Result<(), String> {
         let sub = Arc::new(Status::default());
+        sub.premultiplied.store(premultiplied, Ordering::Relaxed);
         let hwnd = HWND(window.as_raw_hwnd());
         let control = Handler::start_free_threaded(settings(window, false, fps, slot.clone(), sub.clone())).map_err(|e| e.to_string())?;
         while !status.stopped() && alive() && unsafe { IsWindow(Some(hwnd)) }.as_bool() && !control.is_finished() {
@@ -540,7 +566,7 @@ mod platform {
                     Ok(window) => {
                         *status.error.lock() = None;
                         let audio = track.as_ref().and_then(|t| window.process_id().ok().map(|pid| process_audio(pid, status.clone(), t.clone())));
-                        if let Err(e) = capture_window(window, fps, &slot, &status, || true) {
+                        if let Err(e) = capture_window(window, fps, &slot, &status, false, || true) {
                             status.fail(format!("Capture de « {title} » impossible : {e}"));
                         }
                         if let Some(a) = audio {
@@ -604,7 +630,7 @@ mod platform {
                 let audio = track.as_ref().map(|t| process_audio(pid, status.clone(), t.clone()));
                 // Une autre application passe en plein écran : on la capture à la place.
                 let other = move || !matches!(fullscreen_foreground(), Some((h, _)) if h != hwnd);
-                if let Err(e) = capture_window(window, fps, &slot, &status, other) {
+                if let Err(e) = capture_window(window, fps, &slot, &status, false, other) {
                     status.fail(format!("Capture du jeu impossible : {e}"));
                     std::thread::sleep(Duration::from_secs(2));
                 }
@@ -784,6 +810,10 @@ mod platform {
 
     pub fn start_game(_fps: u32, _slot: Slot, status: Arc<Status>, _track: Option<Arc<Track>>) {
         status.fail("Capture de jeu disponible sous Windows uniquement".into());
+    }
+
+    pub fn start_browser(_url: String, _w: u32, _h: u32, _css: String, _fps: u32, _slot: Slot, status: Arc<Status>, _track: Option<Arc<Track>>) {
+        status.fail("Les sources navigateur nécessitent Windows (WebView2).".into());
     }
 
     pub fn start_app_audio(exe: String, status: Arc<Status>, _track: Arc<Track>) {
