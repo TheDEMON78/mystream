@@ -16,11 +16,13 @@ pub struct StreamSettings {
     pub audio_bitrate: u32,
     /// Encodeur FFmpeg : "auto", "h264_nvenc", "h264_qsv", "h264_amf" ou "libx264".
     pub encoder: String,
+    /// Service : "restream" (application Restream de BloopStudio) ou "custom" (serveur RTMP).
+    pub service: String,
 }
 
 impl Default for StreamSettings {
     fn default() -> Self {
-        Self { server: String::new(), key: String::new(), video_bitrate: 6000, audio_bitrate: 160, encoder: "auto".into() }
+        Self { server: String::new(), key: String::new(), video_bitrate: 6000, audio_bitrate: 160, encoder: "auto".into(), service: "custom".into() }
     }
 }
 
@@ -47,11 +49,62 @@ pub struct AudioSettings {
     pub mic_muted: bool,
     pub desktop_volume: f32,
     pub desktop_muted: bool,
+    /// Filtres du micro (gain, noise gate, compresseur).
+    pub mic_filters: AudioFilters,
+    /// Écoute au casque du micro.
+    pub mic_monitor: bool,
 }
 
 impl Default for AudioSettings {
     fn default() -> Self {
-        Self { mic_volume: 1.0, mic_muted: false, desktop_volume: 1.0, desktop_muted: false }
+        Self { mic_volume: 1.0, mic_muted: false, desktop_volume: 1.0, desktop_muted: false, mic_filters: AudioFilters::default(), mic_monitor: false }
+    }
+}
+
+/// Filtres audio d'une piste, comme ceux de la version Electron.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AudioFilters {
+    /// Gain en dB (-20 à +30).
+    pub gain_db: f32,
+    /// Noise gate : coupe le son sous le seuil (bruit de fond, clavier).
+    pub gate: bool,
+    pub gate_threshold_db: f32,
+    /// Compresseur : réduit les pics au-dessus du seuil.
+    pub compressor: bool,
+    pub comp_threshold_db: f32,
+    pub comp_ratio: f32,
+}
+
+impl Default for AudioFilters {
+    fn default() -> Self {
+        Self { gain_db: 0.0, gate: false, gate_threshold_db: -45.0, compressor: false, comp_threshold_db: -18.0, comp_ratio: 4.0 }
+    }
+}
+
+/// Application Restream (BloopStudio) : adresse, mot de passe, RTMP imposé.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RestreamSettings {
+    pub url: String,
+    pub password: String,
+    /// Adresse RTMP imposée (reverse proxy, redirection de port) ; vide = automatique.
+    pub rtmp_url: String,
+    pub allow_self_signed: bool,
+}
+
+/// Chat : via Restream, Twitch en direct, ou désactivé.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChatSettings {
+    /// "restream", "twitch" ou "off".
+    pub mode: String,
+    pub twitch_channel: String,
+}
+
+impl Default for ChatSettings {
+    fn default() -> Self {
+        Self { mode: "restream".into(), twitch_channel: String::new() }
     }
 }
 
@@ -98,6 +151,8 @@ pub struct Settings {
     pub studio: bool,
     pub remote: RemoteSettings,
     pub hotkeys: std::collections::BTreeMap<String, String>,
+    pub restream: RestreamSettings,
+    pub chat: ChatSettings,
 }
 
 impl Default for Settings {
@@ -113,6 +168,8 @@ impl Default for Settings {
             studio: false,
             remote: RemoteSettings::default(),
             hotkeys: Default::default(),
+            restream: RestreamSettings::default(),
+            chat: ChatSettings::default(),
         }
     }
 }
@@ -156,6 +213,8 @@ pub enum SourceKind {
     Camera { device: String, width: u32, height: u32, fps: u32 },
     /// Son d'une application seule (Discord, navigateur…), sans image.
     AppAudio { exe: String },
+    /// Chat du live incrusté dans l'image.
+    Chat { width: u32, height: u32, size: f32, background: [u8; 4], max_messages: u32 },
 }
 
 fn yes() -> bool {
@@ -174,6 +233,7 @@ impl SourceKind {
             SourceKind::Media { .. } => "Média",
             SourceKind::Camera { .. } => "Caméra",
             SourceKind::AppAudio { .. } => "Son d'une application",
+            SourceKind::Chat { .. } => "Chat",
         }
     }
     pub fn glyph(&self) -> &'static str {
@@ -187,6 +247,7 @@ impl SourceKind {
             SourceKind::Media { .. } => "🎞",
             SourceKind::Camera { .. } => "📷",
             SourceKind::AppAudio { .. } => "🎵",
+            SourceKind::Chat { .. } => "💬",
         }
     }
     /// Sources qui produisent du son (piste dans le mixeur).
@@ -253,6 +314,11 @@ pub struct Source {
     pub volume: f32,
     #[serde(default)]
     pub muted: bool,
+    #[serde(default)]
+    pub audio_filters: AudioFilters,
+    /// Écoute au casque.
+    #[serde(default)]
+    pub monitor: bool,
 }
 
 fn one() -> f32 {
@@ -299,6 +365,9 @@ pub struct Item {
     /// Échelle (1 = taille d'origine) ; None tant que la taille de la source est inconnue.
     pub scale: Option<f32>,
     pub visible: bool,
+    /// Verrouillé : ne se déplace pas par erreur dans l'aperçu.
+    #[serde(default)]
+    pub locked: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -412,8 +481,17 @@ impl Project {
     pub fn add_source(&mut self, name: &str, kind: SourceKind) -> u64 {
         let id = self.new_id();
         let name = self.unique_name(name, self.sources.iter().map(|s| s.name.clone()));
-        self.sources.push(Source { id, name, kind, filters: Filters::default(), volume: 1.0, muted: false });
-        let item = Item { id: self.new_id(), source: id, x: 0.0, y: 0.0, scale: None, visible: true };
+        self.sources.push(Source {
+            id,
+            name,
+            kind,
+            filters: Filters::default(),
+            volume: 1.0,
+            muted: false,
+            audio_filters: AudioFilters::default(),
+            monitor: false,
+        });
+        let item = Item { id: self.new_id(), source: id, x: 0.0, y: 0.0, scale: None, visible: true, locked: false };
         let edit = self.edit_scene();
         if let Some(scene) = self.scene_mut(edit) {
             scene.items.insert(0, item);
@@ -428,7 +506,7 @@ impl Project {
 
     /// Ajoute une source existante (partagée) à une scène.
     pub fn add_existing(&mut self, scene: u64, source: u64) {
-        let item = Item { id: self.new_id(), source, x: 0.0, y: 0.0, scale: None, visible: true };
+        let item = Item { id: self.new_id(), source, x: 0.0, y: 0.0, scale: None, visible: true, locked: false };
         if let Some(s) = self.scene_mut(scene) {
             s.items.insert(0, item);
         }
@@ -446,6 +524,28 @@ impl Project {
         if !self.scenes.iter().any(|s| s.items.iter().any(|i| i.source == source)) {
             self.sources.retain(|s| s.id != source);
         }
+    }
+
+    /// Copie d'une scène : sources partagées, ou copiées (indépendantes).
+    pub fn duplicate_scene(&mut self, id: u64, independent: bool) -> Option<u64> {
+        let scene = self.scene(id)?.clone();
+        let name = self.unique_name(&format!("{} (copie)", scene.name), self.scenes.iter().map(|s| s.name.clone()));
+        let mut items = Vec::new();
+        for it in &scene.items {
+            let mut it = it.clone();
+            it.id = self.new_id();
+            if independent && let Some(src) = self.source(it.source).cloned() {
+                let sid = self.new_id();
+                let n = self.unique_name(&format!("{} ({name})", src.name), self.sources.iter().map(|s| s.name.clone()));
+                self.sources.push(Source { id: sid, name: n, ..src });
+                it.source = sid;
+            }
+            items.push(it);
+        }
+        let new = self.new_id();
+        let pos = self.scenes.iter().position(|s| s.id == id).map(|p| p + 1).unwrap_or(self.scenes.len());
+        self.scenes.insert(pos, Scene { id: new, name, items });
+        Some(new)
     }
 
     pub fn add_scene(&mut self) -> u64 {

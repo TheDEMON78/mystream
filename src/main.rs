@@ -8,12 +8,15 @@
 mod app;
 mod audio;
 mod capture;
+mod chat;
 mod compositor;
 mod engine;
 mod model;
 mod obs_import;
 mod output;
+mod overlay;
 mod remote;
+mod restream;
 mod theme;
 mod update;
 

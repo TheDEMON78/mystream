@@ -147,7 +147,19 @@ fn video_args(enc: &str, kbps: u32, fps: u32) -> Vec<String> {
 }
 
 impl Output {
+    /// Démarre une sortie. Pour le streaming via Restream, l'adresse est d'abord
+    /// demandée à l'application Restream et le serveur RTMP vérifié (quelques secondes
+    /// au plus : à appeler hors de l'interface).
     pub fn start(kind: Kind, s: &Settings, width: u32, height: u32, audio: Receiver<Arc<Vec<f32>>>) -> Result<Self> {
+        let mut secret = s.stream.key.trim().to_string();
+        let target = if kind == Kind::Stream && s.stream.service == "restream" {
+            let (url, key) = crate::restream::ingest_url(&s.restream).map_err(|e| anyhow!(e))?;
+            crate::restream::check_rtmp(&url).map_err(|e| anyhow!(e))?;
+            secret = key;
+            Some(url)
+        } else {
+            None
+        };
         let list = encoders();
         let wanted = &s.stream.encoder;
         let encoder = if wanted != "auto" && list.contains(wanted) { wanted.clone() } else { list[0].clone() };
@@ -170,11 +182,16 @@ impl Output {
         args.extend(["-map", "0:v", "-map", "1:a"].into_iter().map(String::from));
         let (target, file) = match kind {
             Kind::Stream => {
-                if s.stream.server.trim().is_empty() || s.stream.key.trim().is_empty() {
-                    return Err(anyhow!("Serveur ou clé de stream manquant (Paramètres > Stream)."));
-                }
                 args.extend(video_args(&encoder, s.stream.video_bitrate, fps));
-                (format!("{}/{}", s.stream.server.trim_end_matches('/'), s.stream.key.trim()), None)
+                match target {
+                    Some(url) => (url, None),
+                    None => {
+                        if s.stream.server.trim().is_empty() || s.stream.key.trim().is_empty() {
+                            return Err(anyhow!("Serveur ou clé de stream manquant (Paramètres > Stream)."));
+                        }
+                        (format!("{}/{}", s.stream.server.trim_end_matches('/'), s.stream.key.trim()), None)
+                    }
+                }
             }
             Kind::Record => {
                 args.extend(video_args(&encoder, s.record.video_bitrate, fps));
@@ -283,8 +300,8 @@ impl Output {
         });
 
         let mut line = args.join(" ");
-        if !s.stream.key.trim().is_empty() {
-            line = line.replace(s.stream.key.trim(), "***"); // jamais la clé de stream dans le journal
+        if !secret.is_empty() {
+            line = line.replace(&secret, "***"); // jamais la clé de stream dans le journal
         }
         log::info!("{} démarré ({encoder}) : {line}", kind.label());
         Ok(Self { kind, encoder, file, started: Instant::now(), stats, video_tx: Some(video_tx), child, audio_stop })
@@ -323,6 +340,11 @@ impl Output {
 /// Horodatage local pour le nom des enregistrements (AAAA-MM-JJ HH-MM-SS).
 fn chrono_like_now() -> String {
     let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    local_date(secs)
+}
+
+/// Date locale « AAAA-MM-JJ HH-MM-SS » d'un horodatage Unix.
+pub fn local_date(secs: i64) -> String {
     let offset = local_offset_secs();
     let t = secs + offset;
     let days = t.div_euclid(86400);

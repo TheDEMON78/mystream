@@ -53,12 +53,25 @@ droits administrateur, raccourcis sur le bureau et dans le menu Démarrer), ou
 - **Import des collections OBS** (scènes, sources, positions, recadrages, volumes).
 - **Mises à jour automatiques** : une bannière propose la nouvelle préversion,
   installée et relancée en un clic.
+- **Restream** (votre application) : adresse d'envoi automatique et
+  vérification du serveur RTMP, dock « Titre et catégorie » (titre, catégorie
+  avec recherche, spectateurs par plateforme, mise à jour partout).
+- **Chat** : dock (Restream ou Twitch en direct), badges, emotes Twitch et Kick,
+  modération ; source « Chat » incrustée dans le stream.
+- **Fin du live** : récapitulatif (durée, messages, pic de spectateurs, images
+  perdues, débit moyen) et historique des lives.
+- **Filtres audio** (gain, noise gate, compresseur) et **écoute au casque**
+  (sans écho dans le son du bureau).
+- **Édition** : annuler / rétablir (Ctrl+Z / Ctrl+Y), verrouillage des sources,
+  transformation précise (Ctrl+E), menu des scènes (dupliquer avec sources
+  partagées ou indépendantes), export / import de la collection, sauvegardes
+  automatiques.
 
 ## Ce qui manque encore (par rapport à la version Electron)
 
-1. Sources navigateur (alertes Streamlabs/StreamElements) et chat : il faut
-   intégrer un moteur web (WebView2).
-2. Connexion au compte Restream (titre, catégorie, spectateurs, chat).
+1. Sources navigateur (alertes Streamlabs/StreamElements) : il faut intégrer
+   un moteur web (WebView2).
+2. Transitions « stinger » (vidéo) et images GIF animées.
 3. Capture sans aucune copie vers le processeur (texture partagée directement
    avec wgpu) et encodage NVENC depuis la carte graphique.
 

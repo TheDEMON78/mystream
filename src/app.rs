@@ -1,13 +1,16 @@
 //! Interface (egui) : scènes, sources, aperçu, mixeur, commandes et paramètres.
 
 mod control;
+mod edit;
+mod live;
+mod session;
 
 use crate::audio::{DESKTOP, MIC, Mixer};
 use crate::capture::{self, Runtime};
 use crate::compositor::{Compositor, DrawItem};
 use crate::engine::{Engine, Shared, TransitionRun, key};
 use crate::model::{Filters, HOTKEY_ACTIONS, Project, Settings, SourceKind, TransitionKind};
-use crate::output::{self, Kind, Output};
+use crate::output::{self, Kind};
 use crate::remote::Remote;
 use crate::theme::{self, Part};
 use egui::{Color32, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Vec2, pos2, vec2};
@@ -49,11 +52,26 @@ pub struct App {
     hotkeys: Vec<(global_hotkey::hotkey::HotKey, &'static str)>,
     update: crate::update::Shared,
     preview_hidden: bool,
+    chat: crate::chat::Chat,
+    pending: Vec<live::Pending>,
+    live: live::LiveDock,
+    session: Option<session::Session>,
+    recap: Option<session::Summary>,
+    history_open: bool,
+    props_window: bool,
+    /// Piste dont la fenêtre des filtres audio est ouverte.
+    audio_filters_open: Option<u64>,
+    undo: Vec<String>,
+    redo: Vec<String>,
+    undo_base: String,
+    last_backup: Option<Instant>,
+    transform_open: bool,
 }
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         theme::apply(&cc.egui_ctx);
+        egui_extras::install_image_loaders(&cc.egui_ctx); // images des emotes du chat
         let render_state = cc.wgpu_render_state.clone().expect("MyStream nécessite le rendu wgpu");
         let project = Project::load();
         let mixer = Mixer::new();
@@ -85,9 +103,23 @@ impl App {
             hotkeys: Vec::new(),
             update: Default::default(),
             preview_hidden: false,
+            chat: Default::default(),
+            pending: Vec::new(),
+            live: Default::default(),
+            session: None,
+            recap: None,
+            history_open: false,
+            props_window: false,
+            audio_filters_open: None,
+            undo: Vec::new(),
+            redo: Vec::new(),
+            undo_base: String::new(),
+            last_backup: None,
+            transform_open: false,
         };
         crate::update::check(app.update.clone());
         app.start_engine(&cc.egui_ctx);
+        app.chat.restart(&app.project.settings.chat, &app.project.settings.restream);
         app.apply_remote();
         let errors = app.apply_hotkeys();
         if !errors.is_empty() {
@@ -141,14 +173,18 @@ impl App {
     /// Démarre ou arrête les sources selon le projet ; règle les pistes du mixeur.
     fn sync_runtimes(&mut self) {
         let fps = self.project.settings.fps;
+        let chat = self.chat.handle();
         self.runtimes.retain(|id, rt| self.project.sources.iter().any(|s| s.id == *id && s.kind == *rt.kind()));
         for s in &self.project.sources {
             if !self.runtimes.contains_key(&s.id) {
                 let track = s.kind.has_audio().then(|| self.mixer.track(s.id));
-                self.runtimes.insert(s.id, Runtime::start(&s.kind, fps, track));
+                self.runtimes.insert(s.id, Runtime::start(&s.kind, fps, track, &chat));
             }
             if s.kind.has_audio() {
-                *self.mixer.track(s.id).gain.lock() = (s.volume, s.muted);
+                let t = self.mixer.track(s.id);
+                *t.gain.lock() = (s.volume, s.muted);
+                *t.filters.lock() = s.audio_filters.clone();
+                t.monitor.store(s.monitor, std::sync::atomic::Ordering::Relaxed);
             }
         }
         let sources = &self.project.sources;
@@ -156,6 +192,8 @@ impl App {
         let a = &self.project.settings.audio;
         if let Some(t) = self.mixer.get(MIC) {
             *t.gain.lock() = (a.mic_volume, a.mic_muted);
+            *t.filters.lock() = a.mic_filters.clone();
+            t.monitor.store(a.mic_monitor, std::sync::atomic::Ordering::Relaxed);
         }
         if let Some(t) = self.mixer.get(DESKTOP) {
             *t.gain.lock() = (a.desktop_volume, a.desktop_muted);
@@ -222,6 +260,9 @@ impl App {
                 out.stop();
             }
             self.notify(format!("{} s'est arrêté : {}", kind.label(), err.unwrap_or_else(|| "fin inattendue".into())), true);
+            if kind == Kind::Stream {
+                self.session_ended();
+            }
         }
     }
 
@@ -233,16 +274,12 @@ impl App {
             if let Some(f) = file {
                 self.notify(format!("Enregistrement sauvegardé : {}", f.display()), false);
             }
+            if kind == Kind::Stream {
+                self.session_ended();
+            }
             return;
         }
-        let (tx, rx) = crossbeam_channel::bounded(100);
-        self.mixer.subscribe(tx);
-        match Output::start(kind, &self.project.settings, self.canvas.0, self.canvas.1, rx) {
-            Ok(out) => {
-                self.shared.outputs.lock().insert(key(kind), out);
-            }
-            Err(e) => self.notify(format!("{} n'a pas pu démarrer : {e:#}", kind.label()), true),
-        }
+        self.start_output(kind);
     }
 
     /// Mode studio : la scène de l'aperçu passe à l'antenne.
@@ -290,6 +327,13 @@ impl App {
     fn item_action(&mut self, what: &str) {
         let scene_id = self.project.edit_scene();
         let Some(sel) = self.selected else { return };
+        if what == "lock" {
+            if let Some(it) = self.project.scene_mut(scene_id).and_then(|s| s.items.iter_mut().find(|i| i.id == sel)) {
+                it.locked = !it.locked;
+            }
+            self.touch();
+            return;
+        }
         if what == "remove" {
             self.project.remove_item(scene_id, sel);
             self.selected = None;
@@ -342,13 +386,30 @@ impl App {
     fn menus(&mut self, ui: &mut egui::Ui) {
         {
             ui.menu_button("Fichier", |ui| {
-                if ui.button("Importer depuis OBS…").clicked() {
+                if ui.button("Exporter la collection de scènes…").clicked() {
+                    ui.close();
+                    self.export_collection();
+                }
+                if ui.button("Importer une collection de scènes…").clicked() {
+                    ui.close();
+                    self.import_collection(false);
+                }
+                if ui.button("Importer une collection OBS…").clicked() {
                     ui.close();
                     self.import_obs();
                 }
+                if ui.button("Restaurer une sauvegarde automatique…").clicked() {
+                    ui.close();
+                    self.import_collection(true);
+                }
+                ui.separator();
                 if ui.button("Ouvrir le dossier des enregistrements").clicked() {
                     ui.close();
                     open_path(&self.project.settings.record.folder);
+                }
+                if ui.button("Historique des lives…").clicked() {
+                    ui.close();
+                    self.history_open = true;
                 }
                 if ui.button("Paramètres…").clicked() {
                     ui.close();
@@ -361,7 +422,29 @@ impl App {
                 }
             });
             ui.menu_button("Édition", |ui| {
+                let (u, r) = self.can_undo();
+                if ui.add_enabled(u, egui::Button::new("Annuler").shortcut_text("Ctrl+Z")).clicked() {
+                    ui.close();
+                    self.undo();
+                }
+                if ui.add_enabled(r, egui::Button::new("Rétablir").shortcut_text("Ctrl+Y")).clicked() {
+                    ui.close();
+                    self.redo();
+                }
+                ui.separator();
                 let has = self.selected.is_some();
+                if ui.add_enabled(has, egui::Button::new("Modifier la transformation…").shortcut_text("Ctrl+E")).clicked() {
+                    ui.close();
+                    self.transform_open = true;
+                }
+                if ui.add_enabled(has, egui::Button::new("Verrouiller / déverrouiller")).clicked() {
+                    ui.close();
+                    self.item_action("lock");
+                }
+                if ui.add_enabled(has, egui::Button::new("Propriétés et filtres…")).clicked() {
+                    ui.close();
+                    self.props_window = true;
+                }
                 for (what, label) in
                     [("fit", "Ajuster à l'écran"), ("original", "Taille d'origine"), ("center", "Centrer à l'écran"), ("remove", "Retirer de la scène")]
                 {
@@ -444,6 +527,7 @@ impl App {
                     if r.clicked() {
                         pick = Some(id);
                     }
+                    r.context_menu(|ui| self.scene_menu(ui, id, &name));
                     if r.double_clicked() {
                         if studio {
                             self.project.current = id; // double-clic en mode studio : à l'antenne
@@ -503,13 +587,14 @@ impl App {
         let scene_id = self.project.edit_scene();
         theme::dock(ui, "Sources", true, |ui, part| match part {
             Part::Body => {
-                let items: Vec<(u64, u64, bool)> =
-                    self.project.scene(scene_id).map(|s| s.items.iter().map(|i| (i.id, i.source, i.visible)).collect()).unwrap_or_default();
+                let items: Vec<(u64, u64, bool, bool)> =
+                    self.project.scene(scene_id).map(|s| s.items.iter().map(|i| (i.id, i.source, i.visible, i.locked)).collect()).unwrap_or_default();
                 if items.is_empty() {
                     ui.label(RichText::new("Cliquez sur + pour ajouter une source.").italics().color(theme::MUTED));
                 }
                 let mut toggle = None;
-                for (item, source, visible) in &items {
+                let mut lock = None;
+                for (item, source, visible, locked) in &items {
                     let Some(src) = self.project.source(*source) else { continue };
                     let rt = self.runtimes.get(source);
                     let status = rt.and_then(|r| r.error());
@@ -526,7 +611,7 @@ impl App {
                         label = label.color(theme::MUTED);
                     }
                     ui.horizontal(|ui| {
-                        let w = (ui.available_width() - 34.0).max(0.0);
+                        let w = (ui.available_width() - 76.0).max(0.0);
                         let sel = self.selected == Some(*item);
                         let r = ui
                             .allocate_ui_with_layout(vec2(w, 26.0), egui::Layout::top_down(egui::Align::Min), |ui| {
@@ -542,13 +627,31 @@ impl App {
                         if r.clicked() {
                             self.selected = Some(*item);
                         }
+                        if r.double_clicked() {
+                            self.selected = Some(*item);
+                            self.props_window = true;
+                        }
                         if theme::tool(ui, if *visible { "👁" } else { "⊘" }, if *visible { "Masquer" } else { "Afficher" }) {
                             toggle = Some(*item);
+                        }
+                        if theme::tool(
+                            ui,
+                            if *locked { "🔒" } else { "🔓" },
+                            if *locked { "Déverrouiller" } else { "Verrouiller (empêche de la déplacer par erreur)" },
+                        ) {
+                            lock = Some(*item);
                         }
                     });
                     if let Some(i) = info {
                         ui.label(RichText::new(format!("      {i}")).small().color(theme::MUTED));
                     }
+                }
+                if let Some(id) = lock
+                    && let Some(scene) = self.project.scene_mut(scene_id)
+                    && let Some(it) = scene.items.iter_mut().find(|i| i.id == id)
+                {
+                    it.locked = !it.locked;
+                    self.touch();
                 }
                 if let Some(id) = toggle
                     && let Some(scene) = self.project.scene_mut(scene_id)
@@ -560,6 +663,9 @@ impl App {
             }
             Part::Footer => {
                 ui.menu_button(RichText::new("+").size(14.0), |ui| self.add_menu(ui)).response.on_hover_text("Ajouter une source");
+                if self.selected.is_some() && theme::tool(ui, "⚙", "Propriétés et filtres (ou double-clic)") {
+                    self.props_window = true;
+                }
                 if self.selected.is_some() && theme::tool(ui, "−", "Retirer la source de la scène") {
                     self.item_action("remove");
                 }
@@ -580,16 +686,18 @@ impl App {
         });
     }
 
-    fn mixer_row(ui: &mut egui::Ui, name: &str, level: f32, vol: &mut f32, muted: &mut bool, err: Option<String>) -> bool {
+    /// Ligne du mixeur ; renvoie (modifié, demande d'ouverture des filtres audio).
+    fn mixer_row(ui: &mut egui::Ui, name: &str, level: f32, vol: &mut f32, muted: &mut bool, monitor: Option<&mut bool>, err: Option<String>) -> (bool, bool) {
         let mut changed = false;
+        let mut filters = false;
         ui.horizontal(|ui| {
             let mut t = RichText::new(name);
             if err.is_some() {
                 t = t.color(theme::WARN);
             }
             let r = ui
-                .allocate_ui_with_layout(vec2(120.0, 22.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    ui.set_width(120.0);
+                .allocate_ui_with_layout(vec2(104.0, 22.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.set_width(104.0);
                     ui.add(egui::Label::new(t).truncate())
                 })
                 .inner;
@@ -600,10 +708,27 @@ impl App {
                 *muted = !*muted;
                 changed = true;
             }
-            ui.spacing_mut().slider_width = 130.0;
+            match monitor {
+                Some(m) => {
+                    let b = egui::Button::new(RichText::new("🎧").size(14.0).color(if *m { theme::ACCENT } else { theme::MUTED }))
+                        .frame(false)
+                        .min_size(vec2(28.0, 24.0));
+                    if ui.add(b).on_hover_text("Écouter au casque (sans l'ajouter au stream)").clicked() {
+                        *m = !*m;
+                        changed = true;
+                    }
+                    if theme::tool(ui, "⚙", "Filtres audio (gain, noise gate, compresseur)") {
+                        filters = true;
+                    }
+                }
+                None => {
+                    ui.add_space(64.0);
+                }
+            }
+            ui.spacing_mut().slider_width = (ui.available_width() - 120.0).clamp(60.0, 130.0);
             changed |= ui.add(egui::Slider::new(vol, 0.0..=2.0).show_value(false)).changed();
             ui.add_sized([44.0, 22.0], egui::Label::new(RichText::new(format!("{:.0} %", *vol * 100.0)).color(theme::MUTED)));
-            let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width().max(40.0) - 6.0, 8.0), Sense::hover());
+            let (bar, _) = ui.allocate_exact_size(vec2((ui.available_width() - 6.0).max(0.0), 8.0), Sense::hover());
             let p = ui.painter();
             p.rect_filled(bar, 3.0, theme::PANEL2);
             let lvl = if *muted { 0.0 } else { level.min(1.0) };
@@ -616,25 +741,42 @@ impl App {
             };
             p.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * lvl, bar.height())), 3.0, color);
         });
-        changed
+        (changed, filters)
     }
 
     fn mixer_dock(&mut self, ui: &mut egui::Ui) {
         theme::dock(ui, "Mixeur audio", false, |ui, _| {
             let mut changed = false;
+            let mut open = None;
             for (id, name) in [(MIC, "Micro"), (DESKTOP, "Son du bureau")] {
                 let t = self.mixer.get(id);
                 let level = t.as_ref().map(|t| *t.level.lock()).unwrap_or(0.0);
                 let err = t.as_ref().and_then(|t| t.error.lock().clone());
                 let a = &mut self.project.settings.audio;
-                let (vol, muted) = if id == MIC { (&mut a.mic_volume, &mut a.mic_muted) } else { (&mut a.desktop_volume, &mut a.desktop_muted) };
-                changed |= Self::mixer_row(ui, name, level, vol, muted, err);
+                // Le son du bureau n'a ni écoute (il s'entendrait deux fois) ni filtres.
+                let (vol, muted, mon) = if id == MIC {
+                    (&mut a.mic_volume, &mut a.mic_muted, Some(&mut a.mic_monitor))
+                } else {
+                    (&mut a.desktop_volume, &mut a.desktop_muted, None)
+                };
+                let (c, f) = Self::mixer_row(ui, name, level, vol, muted, mon, err);
+                changed |= c;
+                if f {
+                    open = Some(id);
+                }
             }
             for s in self.project.sources.iter_mut().filter(|s| s.kind.has_audio()) {
                 let t = self.mixer.get(s.id);
                 let level = t.as_ref().map(|t| *t.level.lock()).unwrap_or(0.0);
                 let err = t.as_ref().and_then(|t| t.error.lock().clone());
-                changed |= Self::mixer_row(ui, &s.name, level, &mut s.volume, &mut s.muted, err);
+                let (c, f) = Self::mixer_row(ui, &s.name, level, &mut s.volume, &mut s.muted, Some(&mut s.monitor), err);
+                changed |= c;
+                if f {
+                    open = Some(s.id);
+                }
+            }
+            if open.is_some() {
+                self.audio_filters_open = open;
             }
             if changed {
                 self.touch();
@@ -669,7 +811,14 @@ impl App {
             ui.spacing_mut().item_spacing.y = 6.0;
             let streaming = self.live(Kind::Stream);
             let recording = self.live(Kind::Record);
-            if theme::command(ui, if streaming { "Arrêter le streaming" } else { "Démarrer le streaming" }, streaming.then_some(theme::DANGER)) {
+            let label = if streaming {
+                "Arrêter le streaming"
+            } else if self.starting(Kind::Stream) {
+                "Connexion…"
+            } else {
+                "Démarrer le streaming"
+            };
+            if theme::command(ui, label, streaming.then_some(theme::DANGER)) {
                 self.toggle_output(Kind::Stream);
             }
             if theme::command(ui, if recording { "Arrêter l'enregistrement" } else { "Démarrer l'enregistrement" }, recording.then_some(theme::DANGER)) {
@@ -690,6 +839,76 @@ impl App {
         });
     }
 
+    /// Colonne de droite : chat, puis titre et catégorie (comme la version Electron).
+    fn right_column(&mut self, ui: &mut egui::Ui) {
+        let h = ui.available_height();
+        let w = ui.available_width();
+        let chat_h = (h * 0.5).max(120.0);
+        ui.allocate_ui_with_layout(vec2(w, chat_h), egui::Layout::top_down(egui::Align::Min), |ui| self.chat_dock(ui));
+        ui.add_space(4.0);
+        ui.allocate_ui_with_layout(vec2(w, (h - chat_h - 4.0).max(60.0)), egui::Layout::top_down(egui::Align::Min), |ui| self.live_dock(ui));
+    }
+
+    /// Filtres audio d'une piste (micro ou source sonore).
+    fn audio_filters_window(&mut self, ctx: &egui::Context) {
+        let Some(id) = self.audio_filters_open else { return };
+        let (name, f) = if id == MIC {
+            ("Micro".to_string(), &mut self.project.settings.audio.mic_filters)
+        } else {
+            match self.project.sources.iter_mut().find(|s| s.id == id) {
+                Some(s) => (s.name.clone(), &mut s.audio_filters),
+                None => {
+                    self.audio_filters_open = None;
+                    return;
+                }
+            }
+        };
+        let mut open = true;
+        let mut changed = false;
+        egui::Window::new(format!("Filtres audio : {name}")).open(&mut open).resizable(false).collapsible(false).show(ctx, |ui| {
+            changed |= ui.add(egui::Slider::new(&mut f.gain_db, -20.0..=30.0).suffix(" dB").text("Gain")).changed();
+            ui.separator();
+            changed |= ui.checkbox(&mut f.gate, "Noise gate (coupe le bruit de fond entre les phrases)").changed();
+            ui.add_enabled_ui(f.gate, |ui| {
+                changed |= ui.add(egui::Slider::new(&mut f.gate_threshold_db, -80.0..=-10.0).suffix(" dB").text("Seuil d'ouverture")).changed();
+            });
+            ui.separator();
+            changed |= ui.checkbox(&mut f.compressor, "Compresseur (égalise le volume, évite la saturation)").changed();
+            ui.add_enabled_ui(f.compressor, |ui| {
+                changed |= ui.add(egui::Slider::new(&mut f.comp_threshold_db, -50.0..=0.0).suffix(" dB").text("Seuil")).changed();
+                changed |= ui.add(egui::Slider::new(&mut f.comp_ratio, 1.0..=20.0).text("Ratio")).changed();
+            });
+            ui.separator();
+            if ui.button("Réinitialiser").clicked() {
+                *f = Default::default();
+                changed = true;
+            }
+        });
+        if changed {
+            self.touch();
+        }
+        if !open {
+            self.audio_filters_open = None;
+        }
+    }
+
+    /// Fenêtre des propriétés et filtres de la source sélectionnée.
+    fn properties_window(&mut self, ctx: &egui::Context) {
+        if !self.props_window || self.selected.is_none() {
+            self.props_window = false;
+            return;
+        }
+        let mut open = true;
+        egui::Window::new("Propriétés et filtres").open(&mut open).default_width(380.0).default_pos(ctx.content_rect().center() - vec2(190.0, 250.0)).show(
+            ctx,
+            |ui| {
+                egui::ScrollArea::vertical().max_height(560.0).show(ui, |ui| self.properties(ui));
+            },
+        );
+        self.props_window = open;
+    }
+
+    #[allow(dead_code)]
     fn properties_dock(&mut self, ui: &mut egui::Ui) {
         theme::dock(ui, "Propriétés et filtres", false, |ui, _| {
             if self.selected.is_none() {
@@ -887,6 +1106,10 @@ impl App {
                 self.add(&name, SourceKind::Media { path: path.to_string_lossy().into_owned(), looping: true });
             }
         }
+        if ui.button("💬 Chat (incrusté dans le stream)").clicked() {
+            ui.close();
+            self.add("Chat", SourceKind::Chat { width: 420, height: 600, size: 22.0, background: [0, 0, 0, 0], max_messages: 15 });
+        }
         if ui.button("■ Couleur").clicked() {
             ui.close();
             let (w, h) = self.canvas;
@@ -1025,6 +1248,21 @@ impl App {
             SourceKind::AppAudio { exe } => {
                 ui.label(format!("Programme : {exe}"));
             }
+            SourceKind::Chat { width, height, size, background, max_messages } => {
+                ui.horizontal(|ui| {
+                    ui.label("Taille");
+                    changed |= ui.add(egui::DragValue::new(width).range(100..=3840).suffix(" px")).changed();
+                    ui.label("×");
+                    changed |= ui.add(egui::DragValue::new(height).range(100..=2160).suffix(" px")).changed();
+                });
+                changed |= ui.add(egui::Slider::new(size, 12.0..=64.0).text("Taille du texte")).changed();
+                changed |= ui.add(egui::Slider::new(max_messages, 1..=50).text("Messages au plus")).changed();
+                ui.horizontal(|ui| {
+                    ui.label("Fond");
+                    changed |= color(ui, background);
+                });
+                ui.label(RichText::new("Le chat vient de Restream ou de Twitch (Paramètres > Chat).").small().color(theme::MUTED));
+            }
         }
         if !src.kind.audio_only() {
             egui::CollapsingHeader::new("Filtres").show(ui, |ui| {
@@ -1120,13 +1358,14 @@ impl App {
             && let Some(scene) = self.project.scene_mut(scene_id)
             && let Some(item) = scene.items.iter_mut().find(|i| i.id == sel)
         {
-            if resp.dragged() && drag != Vec2::ZERO {
+            if resp.dragged() && drag != Vec2::ZERO && !item.locked {
                 item.x += drag.x;
                 item.y += drag.y;
                 moved = true;
             }
             // Molette : agrandir ou réduire autour du centre de l'élément.
             if zoom != 0.0
+                && !item.locked
                 && let (Some(s), Some(r)) = (item.scale, item_rect(item))
             {
                 let ns = (s * (1.0 + zoom * 0.0015)).clamp(0.02, 10.0);
@@ -1183,125 +1422,140 @@ impl App {
         let mut apply = false;
         let mut cancel = false;
         let busy = !self.shared.outputs.lock().is_empty();
+        let test = self.live.test.clone();
         egui::Window::new("Paramètres").open(&mut open).resizable(false).collapsible(false).show(ctx, |ui| {
-            let d = &mut self.draft;
-            ui.heading("Vidéo");
-            ui.add_enabled_ui(!busy, |ui| {
-                egui::Grid::new("video").num_columns(2).show(ui, |ui| {
-                    ui.label("Résolution");
-                    egui::ComboBox::from_id_salt("res").selected_text(format!("{} × {}", d.width, d.height)).show_ui(ui, |ui| {
-                        for (w, h) in RESOLUTIONS {
-                            if ui.selectable_label(d.width == w && d.height == h, format!("{w} × {h}")).clicked() {
-                                d.width = w;
-                                d.height = h;
+            egui::ScrollArea::vertical().max_height(ctx.content_rect().height() - 140.0).show(ui, |ui| {
+                let d = &mut self.draft;
+                ui.heading("Vidéo");
+                ui.add_enabled_ui(!busy, |ui| {
+                    egui::Grid::new("video").num_columns(2).show(ui, |ui| {
+                        ui.label("Résolution");
+                        egui::ComboBox::from_id_salt("res").selected_text(format!("{} × {}", d.width, d.height)).show_ui(ui, |ui| {
+                            for (w, h) in RESOLUTIONS {
+                                if ui.selectable_label(d.width == w && d.height == h, format!("{w} × {h}")).clicked() {
+                                    d.width = w;
+                                    d.height = h;
+                                }
                             }
+                        });
+                        ui.end_row();
+                        ui.label("Images par seconde");
+                        egui::ComboBox::from_id_salt("fps").selected_text(d.fps.to_string()).show_ui(ui, |ui| {
+                            for f in [30, 48, 50, 60] {
+                                ui.selectable_value(&mut d.fps, f, f.to_string());
+                            }
+                        });
+                        ui.end_row();
+                    });
+                });
+                if busy {
+                    ui.label(RichText::new("Arrêtez le streaming et l'enregistrement pour changer la vidéo.").small().weak());
+                }
+                ui.separator();
+                ui.heading("Stream");
+                egui::Grid::new("stream").num_columns(2).show(ui, |ui| {
+                    ui.label("Service");
+                    egui::ComboBox::from_id_salt("service")
+                        .selected_text(if d.stream.service == "restream" { "Restream (votre application)" } else { "Serveur RTMP personnalisé" })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut d.stream.service, "restream".to_string(), "Restream (votre application)");
+                            ui.selectable_value(&mut d.stream.service, "custom".to_string(), "Serveur RTMP personnalisé");
+                        });
+                    ui.end_row();
+                    if d.stream.service != "restream" {
+                        ui.label("Serveur RTMP");
+                        ui.add(egui::TextEdit::singleline(&mut d.stream.server).hint_text("rtmp://live.twitch.tv/app").desired_width(320.0));
+                        ui.end_row();
+                        ui.label("Clé de stream");
+                        ui.add(egui::TextEdit::singleline(&mut d.stream.key).password(true).desired_width(320.0));
+                    }
+                    ui.end_row();
+                    ui.label("Débit vidéo (kb/s)");
+                    ui.add(egui::DragValue::new(&mut d.stream.video_bitrate).range(500..=50000).speed(50));
+                    ui.end_row();
+                    ui.label("Débit audio (kb/s)");
+                    egui::ComboBox::from_id_salt("ab").selected_text(d.stream.audio_bitrate.to_string()).show_ui(ui, |ui| {
+                        for b in [96, 128, 160, 192, 256, 320] {
+                            ui.selectable_value(&mut d.stream.audio_bitrate, b, b.to_string());
                         }
                     });
                     ui.end_row();
-                    ui.label("Images par seconde");
-                    egui::ComboBox::from_id_salt("fps").selected_text(d.fps.to_string()).show_ui(ui, |ui| {
-                        for f in [30, 48, 50, 60] {
-                            ui.selectable_value(&mut d.fps, f, f.to_string());
+                    ui.label("Encodeur");
+                    egui::ComboBox::from_id_salt("enc").selected_text(output::encoder_label(&d.stream.encoder)).show_ui(ui, |ui| {
+                        ui.selectable_value(&mut d.stream.encoder, "auto".to_string(), output::encoder_label("auto"));
+                        for e in output::encoders() {
+                            ui.selectable_value(&mut d.stream.encoder, e.clone(), output::encoder_label(e));
                         }
                     });
                     ui.end_row();
                 });
-            });
-            if busy {
-                ui.label(RichText::new("Arrêtez le streaming et l'enregistrement pour changer la vidéo.").small().weak());
-            }
-            ui.separator();
-            ui.heading("Stream");
-            egui::Grid::new("stream").num_columns(2).show(ui, |ui| {
-                ui.label("Serveur RTMP");
-                ui.add(egui::TextEdit::singleline(&mut d.stream.server).hint_text("rtmp://live.restream.io/live").desired_width(320.0));
-                ui.end_row();
-                ui.label("Clé de stream");
-                ui.add(egui::TextEdit::singleline(&mut d.stream.key).password(true).desired_width(320.0));
-                ui.end_row();
-                ui.label("Débit vidéo (kb/s)");
-                ui.add(egui::DragValue::new(&mut d.stream.video_bitrate).range(500..=50000).speed(50));
-                ui.end_row();
-                ui.label("Débit audio (kb/s)");
-                egui::ComboBox::from_id_salt("ab").selected_text(d.stream.audio_bitrate.to_string()).show_ui(ui, |ui| {
-                    for b in [96, 128, 160, 192, 256, 320] {
-                        ui.selectable_value(&mut d.stream.audio_bitrate, b, b.to_string());
-                    }
-                });
-                ui.end_row();
-                ui.label("Encodeur");
-                egui::ComboBox::from_id_salt("enc").selected_text(output::encoder_label(&d.stream.encoder)).show_ui(ui, |ui| {
-                    ui.selectable_value(&mut d.stream.encoder, "auto".to_string(), output::encoder_label("auto"));
-                    for e in output::encoders() {
-                        ui.selectable_value(&mut d.stream.encoder, e.clone(), output::encoder_label(e));
-                    }
-                });
-                ui.end_row();
-            });
-            ui.separator();
-            ui.heading("Enregistrement");
-            egui::Grid::new("rec").num_columns(2).show(ui, |ui| {
-                ui.label("Dossier");
-                ui.horizontal(|ui| {
-                    ui.add(egui::TextEdit::singleline(&mut d.record.folder).desired_width(260.0));
-                    if ui.button("Parcourir…").clicked()
-                        && let Some(p) = rfd::FileDialog::new().set_directory(&d.record.folder).pick_folder()
-                    {
-                        d.record.folder = p.to_string_lossy().into_owned();
-                    }
-                });
-                ui.end_row();
-                ui.label("Format");
-                egui::ComboBox::from_id_salt("fmt").selected_text(d.record.format.to_uppercase()).show_ui(ui, |ui| {
-                    ui.selectable_value(&mut d.record.format, "mkv".to_string(), "MKV (résiste aux coupures, recommandé)");
-                    ui.selectable_value(&mut d.record.format, "mp4".to_string(), "MP4");
-                });
-                ui.end_row();
-                ui.label("Débit vidéo (kb/s)");
-                ui.add(egui::DragValue::new(&mut d.record.video_bitrate).range(2000..=150000).speed(100));
-                ui.end_row();
-            });
-            ui.separator();
-            ui.heading("Contrôle à distance (Stream Deck)");
-            ui.label(RichText::new("Compatible obs-websocket 5 : plugin MyStream ou plugins OBS du Stream Deck, Touch Portal, Companion…").small().weak());
-            egui::Grid::new("remote").num_columns(2).show(ui, |ui| {
-                ui.label("Activer");
-                ui.checkbox(&mut d.remote.enabled, "");
-                ui.end_row();
-                ui.label("Port");
-                ui.add(egui::DragValue::new(&mut d.remote.port).range(1024..=65535));
-                ui.end_row();
-                ui.label("Mot de passe");
-                ui.horizontal(|ui| {
-                    ui.add(egui::TextEdit::singleline(&mut d.remote.password).desired_width(200.0));
-                    if ui.button("Copier").clicked() {
-                        ui.ctx().copy_text(d.remote.password.clone());
-                    }
-                });
-                ui.end_row();
-                ui.label("Réseau local");
-                ui.checkbox(&mut d.remote.lan, "Accepter les autres appareils du réseau (téléphone, tablette)");
-                ui.end_row();
-            });
-            ui.separator();
-            ui.heading("Raccourcis clavier (fonctionnent même en jeu)");
-            ui.label(RichText::new("Exemples : ctrl+shift+KeyS, alt+F9, ctrl+Digit1. Laissez vide pour aucun raccourci.").small().weak());
-            egui::Grid::new("hotkeys").num_columns(2).show(ui, |ui| {
-                for (action, label) in HOTKEY_ACTIONS {
-                    ui.label(label);
-                    let v = d.hotkeys.entry(action.to_string()).or_default();
-                    ui.add(egui::TextEdit::singleline(v).desired_width(180.0));
+                ui.separator();
+                ui.heading("Enregistrement");
+                egui::Grid::new("rec").num_columns(2).show(ui, |ui| {
+                    ui.label("Dossier");
+                    ui.horizontal(|ui| {
+                        ui.add(egui::TextEdit::singleline(&mut d.record.folder).desired_width(260.0));
+                        if ui.button("Parcourir…").clicked()
+                            && let Some(p) = rfd::FileDialog::new().set_directory(&d.record.folder).pick_folder()
+                        {
+                            d.record.folder = p.to_string_lossy().into_owned();
+                        }
+                    });
                     ui.end_row();
-                }
-            });
-            ui.separator();
-            ui.horizontal(|ui| {
-                if ui.button(RichText::new("Appliquer").strong()).clicked() {
-                    apply = true;
-                }
-                if ui.button("Annuler").clicked() {
-                    cancel = true;
-                }
+                    ui.label("Format");
+                    egui::ComboBox::from_id_salt("fmt").selected_text(d.record.format.to_uppercase()).show_ui(ui, |ui| {
+                        ui.selectable_value(&mut d.record.format, "mkv".to_string(), "MKV (résiste aux coupures, recommandé)");
+                        ui.selectable_value(&mut d.record.format, "mp4".to_string(), "MP4");
+                    });
+                    ui.end_row();
+                    ui.label("Débit vidéo (kb/s)");
+                    ui.add(egui::DragValue::new(&mut d.record.video_bitrate).range(2000..=150000).speed(100));
+                    ui.end_row();
+                });
+                ui.separator();
+                Self::restream_settings(ui, d, &test);
+                ui.separator();
+                ui.heading("Contrôle à distance (Stream Deck)");
+                ui.label(RichText::new("Compatible obs-websocket 5 : plugin MyStream ou plugins OBS du Stream Deck, Touch Portal, Companion…").small().weak());
+                egui::Grid::new("remote").num_columns(2).show(ui, |ui| {
+                    ui.label("Activer");
+                    ui.checkbox(&mut d.remote.enabled, "");
+                    ui.end_row();
+                    ui.label("Port");
+                    ui.add(egui::DragValue::new(&mut d.remote.port).range(1024..=65535));
+                    ui.end_row();
+                    ui.label("Mot de passe");
+                    ui.horizontal(|ui| {
+                        ui.add(egui::TextEdit::singleline(&mut d.remote.password).desired_width(200.0));
+                        if ui.button("Copier").clicked() {
+                            ui.ctx().copy_text(d.remote.password.clone());
+                        }
+                    });
+                    ui.end_row();
+                    ui.label("Réseau local");
+                    ui.checkbox(&mut d.remote.lan, "Accepter les autres appareils du réseau (téléphone, tablette)");
+                    ui.end_row();
+                });
+                ui.separator();
+                ui.heading("Raccourcis clavier (fonctionnent même en jeu)");
+                ui.label(RichText::new("Exemples : ctrl+shift+KeyS, alt+F9, ctrl+Digit1. Laissez vide pour aucun raccourci.").small().weak());
+                egui::Grid::new("hotkeys").num_columns(2).show(ui, |ui| {
+                    for (action, label) in HOTKEY_ACTIONS {
+                        ui.label(label);
+                        let v = d.hotkeys.entry(action.to_string()).or_default();
+                        ui.add(egui::TextEdit::singleline(v).desired_width(180.0));
+                        ui.end_row();
+                    }
+                });
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui.button(RichText::new("Appliquer").strong()).clicked() {
+                        apply = true;
+                    }
+                    if ui.button("Annuler").clicked() {
+                        cancel = true;
+                    }
+                });
             });
         });
         if apply {
@@ -1314,6 +1568,7 @@ impl App {
                 (a.enabled, a.port, &a.password, a.lan) != (b.enabled, b.port, &b.password, b.lan)
             };
             let hotkeys_changed = self.draft.hotkeys != s.hotkeys;
+            let chat_changed = self.draft.chat != s.chat || self.draft.restream != s.restream;
             self.project.settings = self.draft.clone();
             self.project.settings.audio = audio;
             self.project.settings.transition = transition;
@@ -1327,6 +1582,10 @@ impl App {
             self.notify("Paramètres enregistrés.", false);
             if remote_changed {
                 self.apply_remote();
+            }
+            if chat_changed {
+                self.chat.restart(&self.project.settings.chat, &self.project.settings.restream);
+                self.live = Default::default();
             }
             if hotkeys_changed {
                 let errors = self.apply_hotkeys();
@@ -1345,7 +1604,10 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.sync_runtimes();
+        self.poll_outputs();
         self.check_outputs();
+        let viewers = self.live_viewers();
+        self.session_tick(viewers);
         self.handle_remote();
         self.handle_hotkeys();
         self.update_items();
@@ -1357,9 +1619,32 @@ impl eframe::App for App {
             .exact_size(290.0)
             .frame(bar(theme::BG).inner_margin(egui::Margin { left: 4, right: 4, top: 4, bottom: 2 }))
             .show(ui, |ui| self.docks(ui));
-        egui::Panel::right("droite").default_size(340.0).min_size(260.0).frame(bar(theme::BG).inner_margin(4)).show(ui, |ui| self.properties_dock(ui));
+        egui::Panel::right("droite").default_size(340.0).min_size(260.0).frame(bar(theme::BG).inner_margin(4)).show(ui, |ui| self.right_column(ui));
         egui::CentralPanel::default().frame(bar(theme::BG).inner_margin(egui::Margin::symmetric(4, 4))).show(ui, |ui| self.preview(ui));
         self.settings_window(&ctx);
+        self.properties_window(&ctx);
+        self.audio_filters_window(&ctx);
+        self.transform_window(&ctx);
+        // Raccourcis de l'interface (hors champs de saisie).
+        if !ctx.egui_wants_keyboard_input() {
+            let (undo, redo, transform) = ctx.input(|i| {
+                (
+                    i.modifiers.command && i.key_pressed(egui::Key::Z) && !i.modifiers.shift,
+                    i.modifiers.command && (i.key_pressed(egui::Key::Y) || (i.modifiers.shift && i.key_pressed(egui::Key::Z))),
+                    i.modifiers.command && i.key_pressed(egui::Key::E),
+                )
+            });
+            if undo {
+                self.undo();
+            }
+            if redo {
+                self.redo();
+            }
+            if transform && self.selected.is_some() {
+                self.transform_open = true;
+            }
+        }
+        self.session_windows(&ctx);
 
         if let Some((start, secs)) = self.autotest {
             let t = start.elapsed();
@@ -1374,6 +1659,7 @@ impl eframe::App for App {
             }
         }
         if self.dirty.is_some_and(|t| t.elapsed() > Duration::from_secs(1)) {
+            self.record_undo();
             self.project.save();
             self.dirty = None;
         }

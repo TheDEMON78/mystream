@@ -103,6 +103,8 @@ pub fn import(path: &Path, project: &mut Project) -> Result<Report, String> {
                     filters: Filters::default(),
                     volume,
                     muted: src["muted"].as_bool().unwrap_or(false),
+                    audio_filters: Default::default(),
+                    monitor: false,
                 });
                 by_name.insert(name, sid);
                 count += 1;
@@ -140,6 +142,7 @@ pub fn import(path: &Path, project: &mut Project) -> Result<Report, String> {
                 y: it["pos"]["y"].as_f64().unwrap_or(0.0) as f32,
                 scale: Some(it["scale"]["x"].as_f64().unwrap_or(1.0) as f32),
                 visible: it["visible"].as_bool().unwrap_or(true),
+                locked: it["locked"].as_bool().unwrap_or(false),
             });
         }
         project.scenes.push(Scene { id: sid, name: unique, items });

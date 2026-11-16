@@ -27,6 +27,52 @@ pub struct Track {
     pub error: Mutex<Option<String>>,
     /// Volume (0 à 2) et coupure.
     pub gain: Mutex<(f32, bool)>,
+    /// Filtres (gain, noise gate, compresseur).
+    pub filters: Mutex<crate::model::AudioFilters>,
+    /// Écoute au casque.
+    pub monitor: std::sync::atomic::AtomicBool,
+}
+
+/// État des filtres dynamiques d'une piste (suiveur d'enveloppe).
+#[derive(Default)]
+struct Dynamics {
+    env: f32,
+    gate: f32,
+}
+
+fn db_to_lin(db: f32) -> f32 {
+    10f32.powf(db / 20.0)
+}
+
+/// Applique gain, noise gate et compresseur à un bloc stéréo entrelacé.
+fn apply_filters(f: &crate::model::AudioFilters, d: &mut Dynamics, block: &mut [f32]) {
+    let gain = db_to_lin(f.gain_db);
+    // Constantes de temps à 48 kHz : attaque ~2 ms, relâchement ~120 ms.
+    let attack = (-1.0f32 / (0.002 * RATE as f32)).exp();
+    let release = (-1.0f32 / (0.12 * RATE as f32)).exp();
+    let gate_open = (-1.0f32 / (0.003 * RATE as f32)).exp();
+    let gate_close = (-1.0f32 / (0.15 * RATE as f32)).exp();
+    let gate_thr = db_to_lin(f.gate_threshold_db);
+    let comp_thr = db_to_lin(f.comp_threshold_db);
+    for frame in block.chunks_exact_mut(2) {
+        frame[0] *= gain;
+        frame[1] *= gain;
+        let x = frame[0].abs().max(frame[1].abs());
+        d.env = if x > d.env { attack * d.env + (1.0 - attack) * x } else { release * d.env + (1.0 - release) * x };
+        let mut g = 1.0;
+        if f.gate {
+            let target = if d.env >= gate_thr { 1.0 } else { 0.0 };
+            let k = if target > d.gate { gate_open } else { gate_close };
+            d.gate = k * d.gate + (1.0 - k) * target;
+            g *= d.gate;
+        }
+        if f.compressor && d.env > comp_thr {
+            let over_db = 20.0 * (d.env / comp_thr).log10();
+            g *= db_to_lin(-over_db * (1.0 - 1.0 / f.comp_ratio.max(1.0)));
+        }
+        frame[0] *= g;
+        frame[1] *= g;
+    }
 }
 
 impl Track {
@@ -137,7 +183,46 @@ fn open_device(track: Arc<Track>, name: &str, device: Option<cpal::Device>) -> O
 pub struct Mixer {
     tracks: Arc<Mutex<HashMap<u64, Arc<Track>>>>,
     sinks: Arc<Mutex<Vec<Sender<Arc<Vec<f32>>>>>>,
+    /// Son de l'écoute au casque, en attente d'être joué.
+    monitor: Arc<Mutex<VecDeque<f32>>>,
     _streams: Vec<cpal::Stream>,
+}
+
+/// Sortie de l'écoute au casque (périphérique de sortie par défaut).
+fn open_monitor(ring: Arc<Mutex<VecDeque<f32>>>) -> Option<cpal::Stream> {
+    let device = cpal::default_host().default_output_device()?;
+    let config: cpal::StreamConfig = device.default_output_config().ok()?.into();
+    let ch = config.channels as usize;
+    let step = RATE as f64 / config.sample_rate as f64;
+    let mut pos = 0.0f64;
+    let mut last = [0.0f32; 2];
+    let stream = device
+        .build_output_stream::<f32, _, _>(
+            config,
+            move |out: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                let mut r = ring.lock();
+                for frame in out.chunks_exact_mut(ch) {
+                    // Rééchantillonnage au plus proche (suffisant pour l'écoute).
+                    pos += step;
+                    while pos >= 1.0 {
+                        pos -= 1.0;
+                        if let (Some(l), Some(rr)) = (r.pop_front(), r.pop_front()) {
+                            last = [l, rr];
+                        } else {
+                            last = [0.0, 0.0];
+                        }
+                    }
+                    for (i, s) in frame.iter_mut().enumerate() {
+                        *s = last[i.min(1)];
+                    }
+                }
+            },
+            |_| {},
+            None,
+        )
+        .ok()?;
+    stream.play().ok()?;
+    Some(stream)
 }
 
 impl Mixer {
@@ -150,11 +235,16 @@ impl Mixer {
         *desktop.gain.lock() = (1.0, false);
         let mut streams = Vec::new();
         streams.extend(open_device(mic.clone(), "Micro", host.default_input_device()));
-        // Sortie ouverte en entrée : WASAPI capture tout ce que le PC joue (boucle).
-        streams.extend(open_device(desktop.clone(), "Son du bureau", host.default_output_device()));
+        // Son du bureau : sous Windows, tout ce que le PC joue sauf MyStream (pas d'écho de
+        // l'écoute au casque) ; ailleurs, la sortie ouverte en boucle.
+        if !crate::capture::system_audio(desktop.clone()) {
+            streams.extend(open_device(desktop.clone(), "Son du bureau", host.default_output_device()));
+        }
         tracks.lock().insert(MIC, mic);
         tracks.lock().insert(DESKTOP, desktop);
-        let mixer = Self { tracks, sinks: Arc::default(), _streams: streams };
+        let monitor: Arc<Mutex<VecDeque<f32>>> = Arc::default();
+        streams.extend(open_monitor(monitor.clone()));
+        let mixer = Self { tracks, sinks: Arc::default(), monitor, _streams: streams };
         mixer.spawn();
         mixer
     }
@@ -189,33 +279,57 @@ impl Mixer {
     fn spawn(&self) {
         let tracks = self.tracks.clone();
         let sinks = self.sinks.clone();
+        let monitor = self.monitor.clone();
         std::thread::Builder::new()
             .name("mixeur".into())
             .spawn(move || {
                 let period = Duration::from_millis(10);
                 let mut next = Instant::now() + period;
+                let mut dynamics: HashMap<u64, Dynamics> = HashMap::new();
                 loop {
-                    let list: Vec<Arc<Track>> = tracks.lock().values().cloned().collect();
+                    let list: Vec<(u64, Arc<Track>)> = tracks.lock().iter().map(|(k, v)| (*k, v.clone())).collect();
                     let mut mix = vec![0.0f32; BLOCK * 2];
-                    for track in list {
+                    let mut listen = vec![0.0f32; BLOCK * 2];
+                    let mut listening = false;
+                    for (id, track) in list {
                         let (vol, muted) = *track.gain.lock();
                         let vol = if muted { 0.0 } else { vol };
-                        let mut r = track.ring.lock();
-                        // Horloges des appareils légèrement différentes : on rattrape un retard trop grand.
-                        let excess = r.len().saturating_sub(MAX_BUFFER * 2);
-                        r.drain(..excess);
+                        let mut block = vec![0.0f32; BLOCK * 2];
+                        {
+                            let mut r = track.ring.lock();
+                            // Horloges des appareils légèrement différentes : on rattrape un retard trop grand.
+                            let excess = r.len().saturating_sub(MAX_BUFFER * 2);
+                            r.drain(..excess);
+                            for s in block.iter_mut() {
+                                *s = r.pop_front().unwrap_or(0.0);
+                            }
+                        }
+                        let filters = track.filters.lock().clone();
+                        if filters != crate::model::AudioFilters::default() {
+                            apply_filters(&filters, dynamics.entry(id).or_default(), &mut block);
+                        }
+                        let monitored = track.monitor.load(std::sync::atomic::Ordering::Relaxed) && !muted;
+                        listening |= monitored;
                         let mut peak = 0.0f32;
-                        for s in mix.iter_mut() {
-                            let v = r.pop_front().unwrap_or(0.0) * vol;
+                        for (i, s) in mix.iter_mut().enumerate() {
+                            let v = block[i] * vol;
                             peak = peak.max(v.abs());
                             *s += v;
+                            if monitored {
+                                listen[i] += v;
+                            }
                         }
-                        drop(r);
                         let mut l = track.level.lock();
                         *l = peak.max(*l * 0.85); // retombée douce du vumètre
                     }
                     for s in mix.iter_mut() {
                         *s = s.clamp(-1.0, 1.0);
+                    }
+                    if listening {
+                        let mut m = monitor.lock();
+                        m.extend(listen.iter().map(|s| s.clamp(-1.0, 1.0)));
+                        let excess = m.len().saturating_sub(MAX_BUFFER);
+                        m.drain(..excess);
                     }
                     let block = Arc::new(mix);
                     // Sortie trop lente : bloc perdu pour elle ; sortie fermée : retirée.

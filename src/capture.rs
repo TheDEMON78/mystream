@@ -99,7 +99,7 @@ pub struct Runtime {
 }
 
 impl Runtime {
-    pub fn start(kind: &SourceKind, fps: u32, track: Option<Arc<Track>>) -> Self {
+    pub fn start(kind: &SourceKind, fps: u32, track: Option<Arc<Track>>, chat: &crate::chat::ChatHandle) -> Self {
         let slot = Slot::default();
         let status = Arc::new(Status::default());
         match kind {
@@ -121,6 +121,9 @@ impl Runtime {
             SourceKind::Display { monitor } => platform::start_display(*monitor, fps, slot.clone(), status.clone()),
             SourceKind::Window { title, .. } => platform::start_window(title.clone(), fps, slot.clone(), status.clone(), track),
             SourceKind::Game { .. } => platform::start_game(fps, slot.clone(), status.clone(), track),
+            SourceKind::Chat { width, height, size, background, max_messages } => {
+                crate::overlay::start(chat.clone(), *width, *height, *size, *background, *max_messages, slot.clone(), status.clone())
+            }
             SourceKind::AppAudio { exe } => {
                 if let Some(t) = track {
                     platform::start_app_audio(exe.clone(), status.clone(), t);
@@ -539,15 +542,28 @@ mod platform {
         });
     }
 
+    /// Son de tout le PC sauf MyStream (et ses processus) : pas d'écho de l'écoute au casque.
+    pub fn system_audio(track: Arc<Track>) -> bool {
+        let status = Arc::new(Status::default());
+        // Le drapeau d'arrêt n'est jamais levé : la capture dure tant que MyStream est ouvert.
+        std::mem::forget(process_audio_mode(std::process::id(), false, status, track));
+        true
+    }
+
     /// Son d'un processus et de ses enfants (WASAPI). Renvoie le drapeau d'arrêt.
     fn process_audio(pid: u32, status: Arc<Status>, track: Arc<Track>) -> Arc<AtomicBool> {
+        process_audio_mode(pid, true, status, track)
+    }
+
+    /// `include` faux : tout sauf ce processus et ses enfants.
+    fn process_audio_mode(pid: u32, include: bool, status: Arc<Status>, track: Arc<Track>) -> Arc<AtomicBool> {
         let stop = Arc::new(AtomicBool::new(false));
         let stop2 = stop.clone();
         std::thread::spawn(move || {
             let run = || -> Result<(), String> {
                 let _ = wasapi::initialize_mta();
                 let format = wasapi::WaveFormat::new(32, 32, wasapi::SampleType::Float, 48000, 2, None);
-                let mut client = wasapi::AudioClient::new_application_loopback_client(pid, true).map_err(|e| e.to_string())?;
+                let mut client = wasapi::AudioClient::new_application_loopback_client(pid, include).map_err(|e| e.to_string())?;
                 let mode = wasapi::StreamMode::EventsShared { autoconvert: true, buffer_duration_hns: 0 };
                 client.initialize_client(&format, wasapi::Direction::Capture, mode, None).map_err(|e| e.to_string())?;
                 let event = client.set_get_eventhandle().map_err(|e| e.to_string())?;
@@ -699,6 +715,10 @@ mod platform {
         status.fail(format!("Son d'une application ({exe}) disponible sous Windows uniquement"));
     }
 
+    pub fn system_audio(_track: Arc<Track>) -> bool {
+        false
+    }
+
     pub fn programs() -> Vec<String> {
         Vec::new()
     }
@@ -717,4 +737,4 @@ mod platform {
     }
 }
 
-pub use platform::{monitors, programs, windows};
+pub use platform::{monitors, programs, system_audio, windows};
