@@ -97,14 +97,15 @@ pub struct RestreamSettings {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ChatSettings {
-    /// "restream", "twitch" ou "off".
+    /// "restream", "direct" (Twitch et Kick sans compte) ou "off".
     pub mode: String,
     pub twitch_channel: String,
+    pub kick_channel: String,
 }
 
 impl Default for ChatSettings {
     fn default() -> Self {
-        Self { mode: "restream".into(), twitch_channel: String::new() }
+        Self { mode: "restream".into(), twitch_channel: String::new(), kick_channel: String::new() }
     }
 }
 
@@ -118,11 +119,14 @@ pub struct RemoteSettings {
     pub password: String,
     /// Accepter les appareils du réseau local (sinon ce PC uniquement).
     pub lan: bool,
+    /// Mot de passe de la version Electron déjà repris (une seule fois).
+    #[serde(default)]
+    pub electron_checked: bool,
 }
 
 impl Default for RemoteSettings {
     fn default() -> Self {
-        Self { enabled: true, port: 4455, password: String::new(), lan: false }
+        Self { enabled: true, port: 4455, password: String::new(), lan: false, electron_checked: false }
     }
 }
 
@@ -153,6 +157,8 @@ pub struct Settings {
     pub hotkeys: std::collections::BTreeMap<String, String>,
     pub restream: RestreamSettings,
     pub chat: ChatSettings,
+    /// Mises à jour installées automatiquement (jamais pendant un live).
+    pub auto_update: bool,
 }
 
 impl Default for Settings {
@@ -170,6 +176,7 @@ impl Default for Settings {
             hotkeys: Default::default(),
             restream: RestreamSettings::default(),
             chat: ChatSettings::default(),
+            auto_update: true,
         }
     }
 }
@@ -214,7 +221,7 @@ pub enum SourceKind {
     /// Son d'une application seule (Discord, navigateur…), sans image.
     AppAudio { exe: String },
     /// Chat du live incrusté dans l'image.
-    Chat { width: u32, height: u32, size: f32, background: [u8; 4], max_messages: u32 },
+    Chat(ChatStyle),
     /// Page web (alertes, widgets) avec sa transparence et son son.
     Browser {
         url: String,
@@ -226,6 +233,64 @@ pub enum SourceKind {
         audio: bool,
     },
 }
+
+/// Apparence de la source « Chat » (les mêmes réglages que la version Electron).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChatStyle {
+    pub width: u32,
+    pub height: u32,
+    pub size: f32,
+    pub background: [u8; 4],
+    pub max_messages: u32,
+    pub font: String,
+    pub text_color: [u8; 4],
+    /// Couleur des pseudos quand la plateforme n'en fournit pas.
+    pub name_color: [u8; 4],
+    /// Messages masqués après ce nombre de secondes (0 : jamais).
+    pub lifetime: u32,
+    pub show_icons: bool,
+    pub show_badges: bool,
+    pub show_system: bool,
+    /// Contour noir autour du texte.
+    pub shadow: bool,
+}
+
+impl Default for ChatStyle {
+    fn default() -> Self {
+        Self {
+            width: 450,
+            height: 600,
+            size: 24.0,
+            background: [0, 0, 0, 0],
+            max_messages: 30,
+            font: "Segoe UI".into(),
+            text_color: [255, 255, 255, 255],
+            name_color: [0x4c, 0x7d, 0xff, 255],
+            lifetime: 0,
+            show_icons: true,
+            show_badges: true,
+            show_system: false,
+            shadow: true,
+        }
+    }
+}
+
+/// Polices proposées (celles de la version Electron) et leurs fichiers Windows.
+pub const CHAT_FONTS: [(&str, &str, &str); 12] = [
+    ("Arial", "arial.ttf", "arialbd.ttf"),
+    ("Segoe UI", "segoeui.ttf", "seguisb.ttf"),
+    ("Roboto", "Roboto-Regular.ttf", "Roboto-Bold.ttf"),
+    ("Helvetica", "arial.ttf", "arialbd.ttf"),
+    ("Verdana", "verdana.ttf", "verdanab.ttf"),
+    ("Tahoma", "tahoma.ttf", "tahomabd.ttf"),
+    ("Trebuchet MS", "trebuc.ttf", "trebucbd.ttf"),
+    ("Georgia", "georgia.ttf", "georgiab.ttf"),
+    ("Times New Roman", "times.ttf", "timesbd.ttf"),
+    ("Courier New", "cour.ttf", "courbd.ttf"),
+    ("Impact", "impact.ttf", "impact.ttf"),
+    ("Comic Sans MS", "comic.ttf", "comicbd.ttf"),
+];
 
 /// CSS ajouté aux pages, comme celui d'OBS : fond transparent, sans barres de défilement.
 pub fn browser_css() -> String {
@@ -274,6 +339,19 @@ impl SourceKind {
             SourceKind::Media { .. } | SourceKind::AppAudio { .. } => true,
             _ => false,
         }
+    }
+    /// Sources qui occupent un appareil ou du calcul : arrêtées quand elles ne sont plus affichées.
+    pub fn costly(&self) -> bool {
+        matches!(
+            self,
+            SourceKind::Camera { .. }
+                | SourceKind::Display { .. }
+                | SourceKind::Window { .. }
+                | SourceKind::Game { .. }
+                | SourceKind::Media { .. }
+                | SourceKind::Browser { .. }
+                | SourceKind::AppAudio { .. }
+        )
     }
     /// Sources sans image.
     pub fn audio_only(&self) -> bool {
@@ -453,6 +531,19 @@ impl Project {
         if p.scene(p.preview).is_none() {
             p.preview = p.current;
         }
+        // Ancien réglage « Twitch en direct » : devenu « Direct (Twitch + Kick) ».
+        if p.settings.chat.mode == "twitch" {
+            p.settings.chat.mode = "direct".into();
+        }
+        // Le plugin Stream Deck garde le mot de passe de la version Electron :
+        // on le reprend pour que les touches marchent sans rien changer.
+        if !p.settings.remote.electron_checked {
+            p.settings.remote.electron_checked = true;
+            if let Some((password, port)) = electron_remote() {
+                p.settings.remote.password = password;
+                p.settings.remote.port = port;
+            }
+        }
         if p.settings.remote.password.is_empty() {
             p.settings.remote.password = crate::remote::random_token(16);
         }
@@ -608,4 +699,13 @@ mod tests {
         let p: super::Project = serde_json::from_str(&text).unwrap();
         assert_eq!(p.settings.width, 1280);
     }
+}
+
+/// Mot de passe et port du contrôle à distance de la version Electron, s'il est installé.
+fn electron_remote() -> Option<(String, u16)> {
+    let path = dirs::config_dir()?.join("MyStream").join("config.json");
+    let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+    let r = &v["settings"]["remote"];
+    let password = r["password"].as_str().filter(|p| !p.is_empty())?.to_string();
+    Some((password, r["port"].as_u64().and_then(|p| u16::try_from(p).ok()).unwrap_or(4455)))
 }

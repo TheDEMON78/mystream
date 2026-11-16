@@ -1,6 +1,7 @@
-//! Mises à jour automatiques : au démarrage, MyStream cherche sur GitHub une
-//! préversion native plus récente ; l'utilisateur l'installe en un clic
-//! (téléchargement, remplacement de l'exécutable, redémarrage).
+//! Mises à jour automatiques : au démarrage puis toutes les 30 minutes,
+//! MyStream cherche sur GitHub une préversion native plus récente. Elle est
+//! téléchargée et installée en arrière-plan (jamais pendant un live), et
+//! s'applique au prochain lancement ; un clic permet de redémarrer tout de suite.
 
 use parking_lot::Mutex;
 use serde_json::Value;
@@ -26,9 +27,14 @@ pub struct Available {
 pub enum State {
     #[default]
     Idle,
+    /// Vérification en cours.
+    Checking,
+    /// Aucune version plus récente.
+    UpToDate,
     Available(Available),
     Downloading,
-    Ready,
+    /// Installée : utilisée au prochain lancement.
+    Ready(u64),
     Failed(String),
 }
 
@@ -45,7 +51,15 @@ pub fn check(state: Shared) {
         let _ = std::fs::remove_file(exe.with_extension("old.exe"));
     }
     if build() == 0 {
-        return; // version de développement : pas de mise à jour
+        *state.lock() = State::Failed("version de développement : pas de mise à jour automatique".into());
+        return;
+    }
+    {
+        let mut st = state.lock();
+        if matches!(*st, State::Downloading | State::Ready(_) | State::Checking) {
+            return;
+        }
+        *st = State::Checking;
     }
     std::thread::spawn(move || {
         let result = (|| -> Result<Option<Available>, String> {
@@ -71,19 +85,23 @@ pub fn check(state: Shared) {
                 .max_by_key(|a| a.number);
             Ok(best.filter(|a| a.number > build()))
         })();
-        match result {
+        *state.lock() = match result {
             Ok(Some(a)) => {
                 log::info!("Mise à jour disponible : natif 0.1.{}", a.number);
-                *state.lock() = State::Available(a);
+                State::Available(a)
             }
-            Ok(None) => {}
-            Err(e) => log::info!("Vérification des mises à jour impossible : {e}"),
-        }
+            Ok(None) => State::UpToDate,
+            Err(e) => {
+                log::info!("Vérification des mises à jour impossible : {e}");
+                State::Failed(format!("vérification impossible ({e})"))
+            }
+        };
     });
 }
 
 /// Télécharge et installe la mise à jour ; l'état passe à Ready quand il ne reste qu'à redémarrer.
 pub fn install(state: Shared, a: Available) {
+    let number = a.number;
     *state.lock() = State::Downloading;
     std::thread::spawn(move || {
         let result = (|| -> Result<(), String> {
@@ -120,8 +138,11 @@ pub fn install(state: Shared, a: Available) {
             Ok(())
         })();
         *state.lock() = match result {
-            Ok(()) => State::Ready,
-            Err(e) => State::Failed(e),
+            Ok(()) => {
+                log::info!("Mise à jour natif 0.1.{number} installée");
+                State::Ready(number)
+            }
+            Err(e) => State::Failed(format!("installation impossible ({e})")),
         };
     });
 }

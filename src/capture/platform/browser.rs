@@ -77,8 +77,8 @@ pub fn start_browser(url: String, width: u32, height: u32, css: String, fps: u32
     });
 }
 
-#[allow(clippy::too_many_arguments)]
-fn run(url: &str, width: u32, height: u32, css: &str, fps: u32, slot: &Slot, status: &Arc<Status>, track: Option<Arc<Track>>) -> Result<(), String> {
+/// Fenêtre hôte hors de tous les écrans (à gauche de l'écran le plus à gauche).
+unsafe fn host_window(width: u32, height: u32, title: windows::core::PCWSTR) -> Result<HWND, String> {
     unsafe {
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         let instance = GetModuleHandleW(None).map_err(|e| e.to_string())?;
@@ -87,13 +87,12 @@ fn run(url: &str, width: u32, height: u32, css: &str, fps: u32, slot: &Slot, sta
             let class = WNDCLASSW { lpfnWndProc: Some(wndproc), hInstance: instance.into(), lpszClassName: CLASS, ..Default::default() };
             RegisterClassW(&class);
         });
-        // Hors de tous les écrans, à gauche de l'écran le plus à gauche.
         let x = GetSystemMetrics(SM_XVIRTUALSCREEN) - width as i32 - 200;
         let y = GetSystemMetrics(SM_YVIRTUALSCREEN);
-        let hwnd = CreateWindowExW(
+        CreateWindowExW(
             WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
             CLASS,
-            w!("MyStream - source navigateur"),
+            title,
             WS_POPUP | WS_VISIBLE,
             x,
             y,
@@ -104,19 +103,89 @@ fn run(url: &str, width: u32, height: u32, css: &str, fps: u32, slot: &Slot, sta
             Some(instance.into()),
             None,
         )
-        .map_err(|e| format!("fenêtre impossible à créer : {e}"))?;
+        .map_err(|e| format!("fenêtre impossible à créer : {e}"))
+    }
+}
+
+/// Fait vivre les pages de ce fil jusqu'à l'arrêt.
+fn pump(stopped: impl Fn() -> bool) {
+    let mut msg = MSG::default();
+    while !stopped() {
+        unsafe {
+            while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                let _ = TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        }
+        std::thread::sleep(Duration::from_millis(4));
+    }
+}
+
+/// Pas de ralentissement des pages dont la fenêtre n'est pas visible.
+const ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,CalculateNativeWinOcclusion \
+                    --disable-background-timer-throttling --disable-renderer-backgrounding \
+                    --disable-backgrounding-occluded-windows --autoplay-policy=no-user-gesture-required";
+
+/// Page web invisible (chat Kick…) : `script` est injecté avant ceux de la page
+/// et ses `window.ipc.postMessage(texte)` arrivent dans `on_message`.
+pub fn web_page(url: &str, script: &str, folder: &str, on_message: Box<dyn Fn(String) + Send>, stop: Arc<AtomicBool>) -> Result<(), String> {
+    let (url, script) = (url.to_string(), script.to_string());
+    let dir = dirs::config_dir().unwrap_or_else(|| ".".into()).join("MyStream-natif").join("navigateur").join(folder);
+    std::thread::spawn(move || {
+        let on_message: std::rc::Rc<dyn Fn(String) + Send> = std::rc::Rc::from(on_message);
+        // Nouvelle tentative toutes les 10 s si la page ne peut pas s'ouvrir.
+        while !stop.load(Ordering::Relaxed) {
+            let r = unsafe {
+                (|| -> Result<(), String> {
+                    let hwnd = host_window(420, 720, w!("MyStream - chat"))?;
+                    let mut context = WebContext::new(Some(dir.clone()));
+                    let ipc = on_message.clone();
+                    let built = WebViewBuilder::new_with_web_context(&mut context)
+                        .with_url(&url)
+                        .with_initialization_script(script.clone())
+                        .with_additional_browser_args(ARGS)
+                        .with_ipc_handler(move |req| ipc(req.into_body()))
+                        .with_devtools(false)
+                        .build(&Host(hwnd.0 as isize));
+                    let webview = match built {
+                        Ok(w) => w,
+                        Err(e) => {
+                            let _ = DestroyWindow(hwnd);
+                            return Err(format!("WebView2 indisponible ({e}). Installez « Microsoft Edge WebView2 Runtime »."));
+                        }
+                    };
+                    pump(|| stop.load(Ordering::Relaxed));
+                    drop(webview);
+                    let _ = DestroyWindow(hwnd);
+                    Ok(())
+                })()
+            };
+            if let Err(e) = r {
+                on_message(serde_json::json!({ "t": "error", "error": e }).to_string());
+                for _ in 0..100 {
+                    if stop.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            }
+        }
+    });
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run(url: &str, width: u32, height: u32, css: &str, fps: u32, slot: &Slot, status: &Arc<Status>, track: Option<Arc<Track>>) -> Result<(), String> {
+    unsafe {
+        let hwnd = host_window(width, height, w!("MyStream - source navigateur"))?;
         let raw = hwnd.0 as isize;
 
         let mut context = WebContext::new(Some(data_dir(url)));
-        // Pas de ralentissement de la page quand sa fenêtre n'est pas visible.
-        let args = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,CalculateNativeWinOcclusion \
-                    --disable-background-timer-throttling --disable-renderer-backgrounding \
-                    --disable-backgrounding-occluded-windows --autoplay-policy=no-user-gesture-required";
         let built = WebViewBuilder::new_with_web_context(&mut context)
             .with_url(normalize(url))
             .with_transparent(true)
             .with_initialization_script(css_script(css))
-            .with_additional_browser_args(args)
+            .with_additional_browser_args(ARGS)
             .with_default_context_menus(false)
             .with_devtools(false)
             .build(&Host(raw));
@@ -150,14 +219,7 @@ fn run(url: &str, width: u32, height: u32, css: &str, fps: u32, slot: &Slot, sta
             })
         };
 
-        let mut msg = MSG::default();
-        while !status.stopped() {
-            while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
-                let _ = TranslateMessage(&msg);
-                DispatchMessageW(&msg);
-            }
-            std::thread::sleep(Duration::from_millis(4));
-        }
+        pump(|| status.stopped());
         if let Some(a) = audio {
             a.store(true, Ordering::Relaxed);
         }

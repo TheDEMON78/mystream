@@ -127,9 +127,7 @@ impl Runtime {
             SourceKind::Display { monitor } => platform::start_display(*monitor, fps, slot.clone(), status.clone()),
             SourceKind::Window { title, .. } => platform::start_window(title.clone(), fps, slot.clone(), status.clone(), track),
             SourceKind::Game { .. } => platform::start_game(fps, slot.clone(), status.clone(), track),
-            SourceKind::Chat { width, height, size, background, max_messages } => {
-                crate::overlay::start(chat.clone(), *width, *height, *size, *background, *max_messages, slot.clone(), status.clone())
-            }
+            SourceKind::Chat(style) => crate::overlay::start(chat.clone(), style.clone(), slot.clone(), status.clone()),
             SourceKind::Browser { url, width, height, css, audio } => platform::start_browser(
                 url.clone(),
                 (*width).clamp(16, 3840),
@@ -411,39 +409,54 @@ fn start_camera(device: String, w: u32, h: u32, fps: u32, slot: Slot, status: Ar
         let (w, h) = (w.max(2), h.max(2));
         let size = format!("{w}x{h}");
         let rate = fps.max(1).to_string();
-        let scale = format!("scale={w}:{h}");
         // L'image est mise à la taille demandée en sortie : la taille des images lues est connue.
-        let input: Vec<String> = if cfg!(windows) {
-            ["-f", "dshow", "-rtbufsize", "128M", "-video_size", &size, "-framerate", &rate, "-i"]
-                .iter()
-                .map(|s| s.to_string())
-                .chain([format!("video={device}")])
-                .collect()
-        } else {
-            ["-f", "v4l2", "-video_size", &size, "-framerate", &rate, "-i", &device].iter().map(|s| s.to_string()).collect()
-        };
-        let child = ffmpeg()
-            .args(["-loglevel", "error"])
-            .args(&input)
-            .args(["-vf", &scale, "-pix_fmt", "rgba", "-f", "rawvideo", "-"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn();
-        match child {
-            Ok(mut c) => {
-                let mut err = c.stderr.take().unwrap();
-                pump_video(c, w, h, slot, status.clone(), None);
-                let mut text = String::new();
-                let _ = err.read_to_string(&mut text);
-                if !status.stopped()
-                    && let Some(l) = text.lines().rev().find(|l| !l.trim().is_empty())
-                {
-                    status.fail(format!("Caméra « {device} » : {l}"));
-                }
+        let scale = format!("scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:-1:-1:color=black@0");
+        // Toutes les caméras n'offrent pas la taille et la cadence demandées : on essaie
+        // ensuite la taille seule, puis le réglage par défaut de la caméra.
+        let modes: [&[&str]; 3] = [&["-video_size", &size, "-framerate", &rate], &["-video_size", &size], &[]];
+        let mut last_error = String::new();
+        for mode in modes {
+            if status.stopped() {
+                return;
             }
-            Err(e) => status.fail(format!("FFmpeg introuvable : {e}")),
+            let mut cmd = ffmpeg();
+            cmd.args(["-loglevel", "error"]);
+            if cfg!(windows) {
+                cmd.args(["-f", "dshow", "-rtbufsize", "256M"]).args(mode).args(["-i", &format!("video={device}")]);
+            } else {
+                cmd.args(["-f", "v4l2"]).args(mode).args(["-i", &device]);
+            }
+            let child = cmd.args(["-vf", &scale, "-pix_fmt", "rgba", "-f", "rawvideo", "-"]).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn();
+            let mut c = match child {
+                Ok(c) => c,
+                Err(e) => return status.fail(format!("FFmpeg introuvable : {e}")),
+            };
+            let mut out = c.stdout.take().unwrap();
+            let mut err = c.stderr.take().unwrap();
+            status.adopt(c);
+            let mut buf = vec![0u8; (w * h * 4) as usize];
+            let mut frames = 0u64;
+            while !status.stopped() && out.read_exact(&mut buf).is_ok() {
+                if frames == 0 {
+                    *status.error.lock() = None;
+                    log::info!("Caméra « {device} » ouverte ({})", if mode.is_empty() { "réglage par défaut".to_string() } else { mode.join(" ") });
+                }
+                frames += 1;
+                slot.set(Frame::new(w, h, buf.clone()));
+                status.frame();
+            }
+            if status.stopped() {
+                return;
+            }
+            let mut text = String::new();
+            let _ = err.read_to_string(&mut text);
+            last_error = text.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("la caméra ne répond pas").to_string();
+            if frames > 0 {
+                break; // la caméra a fonctionné puis s'est arrêtée (débranchée, prise par un autre logiciel)
+            }
+            log::info!("Caméra « {device} » refusée avec {:?} : {last_error}", mode);
         }
+        status.fail(format!("Caméra « {device} » : {last_error}. Fermez les autres logiciels qui l'utilisent, ou choisissez une autre résolution."));
     });
 }
 
@@ -457,7 +470,7 @@ pub struct MonitorInfo {
 mod platform {
     use super::*;
     mod browser;
-    pub use browser::start_browser;
+    pub use browser::{start_browser, web_page};
     use windows::Win32::Foundation::{CloseHandle, HWND, RECT};
     use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow};
     use windows::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS};
@@ -816,6 +829,10 @@ mod platform {
         status.fail("Les sources navigateur nécessitent Windows (WebView2).".into());
     }
 
+    pub fn web_page(_url: &str, _script: &str, _folder: &str, _on_message: Box<dyn Fn(String) + Send>, _stop: Arc<AtomicBool>) -> Result<(), String> {
+        Err("Le chat Kick en direct nécessite Windows (WebView2) ; utilisez Restream.".into())
+    }
+
     pub fn start_app_audio(exe: String, status: Arc<Status>, _track: Arc<Track>) {
         status.fail(format!("Son d'une application ({exe}) disponible sous Windows uniquement"));
     }
@@ -842,4 +859,4 @@ mod platform {
     }
 }
 
-pub use platform::{monitors, programs, system_audio, windows};
+pub use platform::{monitors, programs, system_audio, web_page, windows};

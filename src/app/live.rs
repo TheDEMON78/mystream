@@ -2,8 +2,7 @@
 //! et démarrage des sorties sans bloquer l'interface.
 
 use super::App;
-use crate::chat::{Part as ChatPart, badge, platform_color, platform_name};
-use crate::model::{ChatSettings, RestreamSettings, Settings};
+use crate::chat::{Message, Part as ChatPart, badge_svg, platform_color, platform_name, platform_svg};
 use crate::output::{Kind, Output};
 use crate::restream::{self, PlatformInfo};
 use crate::theme::{self, Part};
@@ -13,7 +12,7 @@ use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// Images des emotes, téléchargées une fois (certains serveurs refusent le chargeur d'images d'egui).
+/// Images des emotes et des badges, téléchargées une fois (certains serveurs refusent le chargeur d'images d'egui).
 fn emote_bytes(url: &str) -> Option<Arc<[u8]>> {
     use std::collections::HashMap;
     use std::sync::OnceLock;
@@ -33,6 +32,87 @@ fn emote_bytes(url: &str) -> Option<Arc<[u8]>> {
 
 fn rgb(c: [u8; 3]) -> Color32 {
     Color32::from_rgb(c[0], c[1], c[2])
+}
+
+/// Image téléchargée (emote, badge) à la hauteur donnée.
+fn web_image(ui: &mut egui::Ui, url: &str, h: f32, hover: &str) -> bool {
+    match emote_bytes(url) {
+        Some(b) => {
+            ui.add(egui::Image::from_bytes(format!("bytes://{url}"), egui::load::Bytes::Shared(b)).fit_to_exact_size(vec2(h * 4.0, h)).max_height(h)).on_hover_text(hover);
+            true
+        }
+        None => false,
+    }
+}
+
+/// Image SVG intégrée (logo de plateforme, badge dessiné).
+fn svg_image(ui: &mut egui::Ui, name: &str, svg: String, size: f32, hover: &str) {
+    ui.add(egui::Image::from_bytes(format!("bytes://{name}.svg"), svg.into_bytes()).fit_to_exact_size(vec2(size, size))).on_hover_text(hover);
+}
+
+/// Une ligne du chat, comme dans la version Electron : logo, badges, pseudo, message.
+fn chat_line(ui: &mut egui::Ui, m: &Message) {
+    let text: String = m.plain_text();
+    if m.divider {
+        ui.add_space(4.0);
+        ui.vertical_centered(|ui| ui.label(RichText::new(format!("— {text} —")).size(11.0).color(theme::MUTED)));
+        ui.add_space(4.0);
+        return;
+    }
+    if m.system {
+        ui.label(RichText::new(format!("[{}] {text}", platform_name(&m.platform))).italics().color(theme::MUTED));
+        return;
+    }
+    let mention = Color32::from_rgb(0xff, 0xb8, 0x4d);
+    let frame = if m.mentioned {
+        egui::Frame::new().fill(Color32::from_rgba_unmultiplied(255, 184, 77, 31)).inner_margin(egui::Margin { left: 6, right: 2, top: 2, bottom: 2 })
+    } else {
+        egui::Frame::new().inner_margin(egui::Margin::symmetric(0, 2))
+    };
+    let r = frame.show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 3.0;
+            if let Some(svg) = platform_svg(&m.platform) {
+                svg_image(ui, &format!("platform-{}", m.platform), svg, 14.0, platform_name(&m.platform));
+            }
+            for b in &m.badges {
+                let label = b.label();
+                if let Some(url) = &b.image
+                    && web_image(ui, url, 18.0, &label)
+                {
+                    continue;
+                }
+                if let Some(svg) = badge_svg(&b.kind) {
+                    svg_image(ui, &format!("badge-{}", b.kind), svg, 18.0, &label);
+                } else {
+                    egui::Frame::new()
+                        .fill(theme::ACCENT2)
+                        .corner_radius(3)
+                        .inner_margin(egui::Margin::symmetric(4, 0))
+                        .show(ui, |ui| ui.label(RichText::new(&label).size(10.0).strong().color(Color32::WHITE)));
+                }
+            }
+            let name = m.color.map(rgb).unwrap_or(theme::ACCENT);
+            ui.label(RichText::new(&m.username).family(theme::bold()).color(name));
+            for p in &m.parts {
+                match p {
+                    ChatPart::Text(t) => {
+                        ui.label(t.as_str());
+                    }
+                    ChatPart::Emote { name, url } => {
+                        if !web_image(ui, url, 24.0, name) {
+                            ui.label(RichText::new(name).color(theme::MUTED));
+                        }
+                    }
+                }
+            }
+        });
+    });
+    if m.mentioned {
+        let rect = r.response.rect;
+        ui.painter().rect_filled(egui::Rect::from_min_size(rect.min, vec2(3.0, rect.height())), 0.0, mention);
+    }
 }
 
 /// État du dock « Titre et catégorie ».
@@ -116,63 +196,54 @@ impl App {
 
     pub(super) fn chat_dock(&mut self, ui: &mut egui::Ui) {
         let mode = self.project.settings.chat.mode.clone();
+        let mut configure = false;
         theme::dock(ui, "Chat", true, |ui, part| match part {
             Part::Body => {
                 if mode == "off" {
-                    ui.label(RichText::new("Chat désactivé (Paramètres > Chat).").italics().color(theme::MUTED));
+                    if ui.link(RichText::new("Configurer le chat…").color(theme::ACCENT)).clicked() {
+                        configure = true;
+                    }
                     return;
                 }
-                for (p, st, err) in self.chat.status() {
-                    if st != "connected" {
-                        let (text, color) = match st.as_str() {
-                            "connecting" => (format!("{} : connexion…", platform_name(&p)), theme::MUTED),
-                            _ => (format!("{} : {}", platform_name(&p), err.unwrap_or_else(|| "déconnecté".into())), theme::DANGER),
+                // Pastilles d'état, comme la version Electron.
+                let status = self.chat.status();
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+                    let list = if status.is_empty() && mode == "restream" { vec![(mode.clone(), "connecting".to_string(), None)] } else { status.clone() };
+                    for (p, st, err) in &list {
+                        let (fill, color, word) = match st.as_str() {
+                            "connected" => (Color32::from_rgba_unmultiplied(51, 194, 127, 46), theme::SUCCESS, "connecté"),
+                            "error" => (Color32::from_rgba_unmultiplied(255, 77, 90, 46), theme::DANGER, "erreur"),
+                            _ => (theme::PANEL2, theme::MUTED, "connexion…"),
                         };
-                        ui.label(RichText::new(text).small().color(color));
+                        let r = egui::Frame::new()
+                            .fill(fill)
+                            .corner_radius(10)
+                            .inner_margin(egui::Margin::symmetric(8, 1))
+                            .show(ui, |ui| ui.label(RichText::new(format!("{} : {word}", platform_name(p))).size(11.0).color(color)))
+                            .response;
+                        if let Some(e) = err {
+                            r.on_hover_text(e);
+                        }
+                    }
+                });
+                for (p, st, err) in &status {
+                    if st == "error"
+                        && let Some(e) = err
+                    {
+                        ui.label(RichText::new(format!("{} : {e}", platform_name(p))).size(11.0).color(theme::DANGER));
                     }
                 }
+                theme::line(ui);
                 let messages = self.chat.messages();
-                if messages.is_empty() {
+                if status.is_empty() && mode == "direct" {
+                    ui.label(RichText::new("Indiquez vos chaînes Twitch et Kick (⚙ ci-dessous).").italics().color(theme::MUTED));
+                } else if messages.is_empty() {
                     ui.label(RichText::new("Aucun message pour le moment.").italics().color(theme::MUTED));
                 }
                 egui::ScrollArea::vertical().id_salt("chat-msgs").stick_to_bottom(true).auto_shrink(false).show(ui, |ui| {
                     for m in &messages {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.spacing_mut().item_spacing.x = 3.0;
-                            let (r, _) = ui.allocate_exact_size(vec2(8.0, 14.0), egui::Sense::hover());
-                            ui.painter().circle_filled(r.center(), 3.5, rgb(platform_color(&m.platform)));
-                            for b in &m.badges {
-                                if let Some((label, c)) = badge(b) {
-                                    egui::Frame::new()
-                                        .fill(rgb(c))
-                                        .corner_radius(3)
-                                        .inner_margin(egui::Margin::symmetric(4, 0))
-                                        .show(ui, |ui| {
-                                            ui.label(RichText::new(label.chars().next().unwrap_or('•').to_string()).small().color(Color32::WHITE));
-                                        })
-                                        .response
-                                        .on_hover_text(label);
-                                }
-                            }
-                            let name = m.color.map(rgb).unwrap_or(rgb(platform_color(&m.platform)));
-                            ui.label(RichText::new(&m.username).family(theme::bold()).color(name)).on_hover_text(platform_name(&m.platform));
-                            for p in &m.parts {
-                                match p {
-                                    ChatPart::Text(t) => {
-                                        ui.label(t.as_str());
-                                    }
-                                    ChatPart::Emote { name, url } => match emote_bytes(url) {
-                                        Some(b) => {
-                                            ui.add(egui::Image::from_bytes(format!("bytes://{url}"), egui::load::Bytes::Shared(b)).max_height(22.0))
-                                                .on_hover_text(name);
-                                        }
-                                        None => {
-                                            ui.label(RichText::new(name).color(theme::MUTED));
-                                        }
-                                    },
-                                }
-                            }
-                        });
+                        chat_line(ui, m);
                     }
                 });
             }
@@ -181,10 +252,13 @@ impl App {
                     self.chat.clear();
                 }
                 if theme::tool(ui, "⚙", "Paramètres du chat") {
-                    self.open_settings();
+                    configure = true;
                 }
             }
         });
+        if configure {
+            self.open_settings_tab(super::settings::Tab::Chat);
+        }
     }
 
     /* Dock Titre et catégorie ----------------------------------------------- */
@@ -288,71 +362,6 @@ impl App {
                     self.live.filled = false;
                     self.refresh_live();
                 }
-            }
-        });
-    }
-
-    /* Paramètres Restream et chat ------------------------------------------- */
-
-    pub(super) fn restream_settings(ui: &mut egui::Ui, d: &mut Settings, test: &Arc<Mutex<Option<(String, bool)>>>) {
-        ui.heading("Restream");
-        ui.label(
-            RichText::new("Votre application Restream (BloopStudio) : MyStream lui envoie le live, lit le chat et gère titre, catégorie et spectateurs.")
-                .small()
-                .color(theme::MUTED),
-        );
-        egui::Grid::new("restream").num_columns(2).show(ui, |ui| {
-            let r: &mut RestreamSettings = &mut d.restream;
-            ui.label("Adresse");
-            ui.add(egui::TextEdit::singleline(&mut r.url).hint_text("http://192.168.1.10:8080").desired_width(320.0));
-            ui.end_row();
-            ui.label("Mot de passe");
-            ui.add(egui::TextEdit::singleline(&mut r.password).password(true).desired_width(320.0));
-            ui.end_row();
-            ui.label("Adresse RTMP imposée");
-            ui.add(egui::TextEdit::singleline(&mut r.rtmp_url).hint_text("vide = automatique").desired_width(320.0));
-            ui.end_row();
-            ui.label("");
-            ui.checkbox(&mut r.allow_self_signed, "Accepter un certificat HTTPS auto-signé");
-            ui.end_row();
-        });
-        ui.horizontal(|ui| {
-            if ui.button("Tester la connexion").clicked() {
-                let (cfg, test) = (d.restream.clone(), test.clone());
-                *test.lock() = Some(("Test en cours…".into(), false));
-                std::thread::spawn(move || {
-                    let r = restream::ingest_url(&cfg).and_then(|(url, _)| restream::check_rtmp(&url).map(|_| url));
-                    *test.lock() = Some(match r {
-                        Ok(url) => (format!("Connexion réussie : le live partira vers {}", url.rsplitn(2, '/').nth(1).unwrap_or(&url)), false),
-                        Err(e) => (e, true),
-                    });
-                });
-            }
-            if let Some((m, err)) = test.lock().clone() {
-                ui.label(RichText::new(m).small().color(if err { theme::DANGER } else { theme::SUCCESS }));
-            }
-        });
-        ui.separator();
-        ui.heading("Chat");
-        let c: &mut ChatSettings = &mut d.chat;
-        egui::Grid::new("chat").num_columns(2).show(ui, |ui| {
-            ui.label("Source du chat");
-            egui::ComboBox::from_id_salt("chatmode")
-                .selected_text(match c.mode.as_str() {
-                    "restream" => "Restream (Twitch, Kick… réunis)",
-                    "twitch" => "Twitch en direct",
-                    _ => "Désactivé",
-                })
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut c.mode, "restream".into(), "Restream (Twitch, Kick… réunis)");
-                    ui.selectable_value(&mut c.mode, "twitch".into(), "Twitch en direct");
-                    ui.selectable_value(&mut c.mode, "off".into(), "Désactivé");
-                });
-            ui.end_row();
-            if c.mode == "twitch" {
-                ui.label("Chaîne Twitch");
-                ui.add(egui::TextEdit::singleline(&mut c.twitch_channel).hint_text("nom de la chaîne").desired_width(220.0));
-                ui.end_row();
             }
         });
     }

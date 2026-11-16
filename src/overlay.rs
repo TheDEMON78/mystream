@@ -1,39 +1,48 @@
-//! Source « Chat » : le chat du live dessiné dans l'image du stream (pseudos
-//! en couleur, badges, images des emotes), les messages les plus récents en
-//! bas, comme l'incrustation de la version Electron.
+//! Source « Chat » : le chat du live dessiné dans l'image du stream, comme
+//! l'incrustation de la version Electron : logo de la plateforme, badges
+//! (images officielles ou logos dessinés), pseudo en couleur, emotes, contour
+//! du texte, messages les plus récents en bas, disparition après un délai.
 
 use crate::capture::{Frame, Slot, Status};
-use crate::chat::{ChatHandle, Message, Part};
+use crate::chat::{ChatHandle, Message, Part, badge_svg, platform_name, platform_svg};
+use crate::model::{CHAT_FONTS, ChatStyle};
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 struct Fonts {
     regular: fontdue::Font,
     bold: fontdue::Font,
 }
 
-fn fonts() -> &'static Fonts {
-    static F: OnceLock<Fonts> = OnceLock::new();
-    F.get_or_init(|| {
-        let load = |names: &[&str], fallback: &'static [u8]| {
-            let dir = std::env::var("WINDIR").map(|w| std::path::PathBuf::from(w).join("Fonts")).unwrap_or_default();
-            let bytes = names.iter().find_map(|n| std::fs::read(dir.join(n)).ok()).unwrap_or_else(|| fallback.to_vec());
-            fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default()).expect("police")
-        };
-        Fonts {
-            regular: load(&["segoeui.ttf"], epaint_default_fonts::UBUNTU_LIGHT),
-            bold: load(&["seguisb.ttf", "segoeuib.ttf"], epaint_default_fonts::UBUNTU_LIGHT),
-        }
-    })
+/// Police choisie (fichiers de Windows), sinon celle intégrée.
+fn fonts(name: &str) -> Arc<Fonts> {
+    static CACHE: OnceLock<Mutex<HashMap<String, Arc<Fonts>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(f) = cache.lock().get(name) {
+        return f.clone();
+    }
+    let (_, regular, bold) = CHAT_FONTS.iter().find(|(n, _, _)| *n == name).copied().unwrap_or(CHAT_FONTS[1]);
+    let dir = std::env::var("WINDIR").map(|w| std::path::PathBuf::from(w).join("Fonts")).unwrap_or_default();
+    let load = |files: &[&str], fallback: &'static [u8]| {
+        let bytes = files.iter().find_map(|n| std::fs::read(dir.join(n)).ok()).unwrap_or_else(|| fallback.to_vec());
+        fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default())
+            .unwrap_or_else(|_| fontdue::Font::from_bytes(fallback, fontdue::FontSettings::default()).expect("police"))
+    };
+    let f = Arc::new(Fonts {
+        regular: load(&[regular, "segoeui.ttf"], epaint_default_fonts::UBUNTU_LIGHT),
+        bold: load(&[bold, "seguisb.ttf", "segoeuib.ttf"], epaint_default_fonts::UBUNTU_LIGHT),
+    });
+    cache.lock().insert(name.to_string(), f.clone());
+    f
 }
 
-/// Images des emotes, téléchargées une fois (None : en cours ou échec).
+/// Images des emotes et badges, téléchargées une fois (None : en cours ou échec).
 type Images = Arc<Mutex<HashMap<String, Option<Arc<image::RgbaImage>>>>>;
 
-fn emote(images: &Images, url: &str) -> Option<Arc<image::RgbaImage>> {
+fn web_image(images: &Images, url: &str) -> Option<Arc<image::RgbaImage>> {
     let mut map = images.lock();
     if let Some(v) = map.get(url) {
         return v.clone();
@@ -50,6 +59,33 @@ fn emote(images: &Images, url: &str) -> Option<Arc<image::RgbaImage>> {
         images.lock().insert(url, img);
     });
     None
+}
+
+/// Logo SVG (plateforme, badge dessiné) rendu à la taille voulue.
+fn svg_image(svg: &str, px: u32) -> Option<Arc<image::RgbaImage>> {
+    static CACHE: OnceLock<Mutex<HashMap<(String, u32), Option<Arc<image::RgbaImage>>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    let key = (svg.to_string(), px);
+    if let Some(v) = cache.lock().get(&key) {
+        return v.clone();
+    }
+    let img = (|| {
+        let tree = resvg::usvg::Tree::from_str(svg, &resvg::usvg::Options::default()).ok()?;
+        let mut pixmap = resvg::tiny_skia::Pixmap::new(px.max(1), px.max(1))?;
+        let k = px as f32 / tree.size().width().max(1.0);
+        resvg::render(&tree, resvg::tiny_skia::Transform::from_scale(k, k), &mut pixmap.as_mut());
+        let data: Vec<u8> = pixmap
+            .pixels()
+            .iter()
+            .flat_map(|p| {
+                let c = p.demultiply();
+                [c.red(), c.green(), c.blue(), c.alpha()]
+            })
+            .collect();
+        image::RgbaImage::from_raw(px, px, data).map(Arc::new)
+    })();
+    cache.lock().insert(key, img.clone());
+    img
 }
 
 struct Canvas {
@@ -74,160 +110,236 @@ impl Canvas {
         self.data[i + 3] = (oa * 255.0).round() as u8;
     }
 
-    fn glyph(&mut self, font: &fontdue::Font, c: char, x: f32, baseline: f32, size: f32, rgb: [u8; 3]) -> f32 {
+    /// Dessine un caractère ; avec `outline`, d'abord un contour noir autour.
+    fn glyph(&mut self, font: &fontdue::Font, c: char, x: f32, baseline: f32, size: f32, rgb: [u8; 3], alpha: f32, outline: f32) -> f32 {
         let (m, bmp) = font.rasterize(c, size);
         let gx = x.round() as i32 + m.xmin;
         let gy = baseline.round() as i32 - m.height as i32 - m.ymin;
+        if outline > 0.0 {
+            let r = outline.round().max(1.0) as i32;
+            for row in 0..m.height {
+                for col in 0..m.width {
+                    let a = bmp[row * m.width + col] as f32 / 255.0;
+                    if a <= 0.05 {
+                        continue;
+                    }
+                    for dy in -r..=r {
+                        for dx in -r..=r {
+                            if dx * dx + dy * dy <= r * r {
+                                self.blend(gx + col as i32 + dx, gy + row as i32 + dy, [0, 0, 0], a * 0.85 * alpha * 0.35);
+                            }
+                        }
+                    }
+                }
+            }
+        }
         for row in 0..m.height {
             for col in 0..m.width {
-                self.blend(gx + col as i32, gy + row as i32, rgb, bmp[row * m.width + col] as f32 / 255.0);
+                self.blend(gx + col as i32, gy + row as i32, rgb, bmp[row * m.width + col] as f32 / 255.0 * alpha);
             }
         }
         m.advance_width
     }
 
-    fn image(&mut self, img: &image::RgbaImage, x: f32, y: f32, h: f32) -> f32 {
-        let w = img.width() as f32 * h / img.height().max(1) as f32;
+    /// Image redimensionnée (bilinéaire) en (x, y), largeur w et hauteur h.
+    fn image(&mut self, img: &image::RgbaImage, x: f32, y: f32, w: f32, h: f32, alpha: f32) {
+        let (iw, ih) = (img.width() as f32, img.height() as f32);
         for py in 0..h.ceil() as i32 {
             for px in 0..w.ceil() as i32 {
-                let sx = ((px as f32 / w) * img.width() as f32) as u32;
-                let sy = ((py as f32 / h) * img.height() as f32) as u32;
-                let p = img.get_pixel(sx.min(img.width() - 1), sy.min(img.height() - 1)).0;
-                self.blend(x as i32 + px, y as i32 + py, [p[0], p[1], p[2]], p[3] as f32 / 255.0);
+                let sx = ((px as f32 + 0.5) / w * iw - 0.5).clamp(0.0, iw - 1.0);
+                let sy = ((py as f32 + 0.5) / h * ih - 0.5).clamp(0.0, ih - 1.0);
+                let (x0, y0) = (sx.floor() as u32, sy.floor() as u32);
+                let (x1, y1) = ((x0 + 1).min(img.width() - 1), (y0 + 1).min(img.height() - 1));
+                let (fx, fy) = (sx - x0 as f32, sy - y0 as f32);
+                let mut acc = [0f32; 4];
+                for (xx, yy, wgt) in [(x0, y0, (1.0 - fx) * (1.0 - fy)), (x1, y0, fx * (1.0 - fy)), (x0, y1, (1.0 - fx) * fy), (x1, y1, fx * fy)] {
+                    let p = img.get_pixel(xx, yy).0;
+                    let a = p[3] as f32 * wgt;
+                    for k in 0..3 {
+                        acc[k] += p[k] as f32 * a;
+                    }
+                    acc[3] += a;
+                }
+                if acc[3] > 0.0 {
+                    let rgb = [(acc[0] / acc[3]) as u8, (acc[1] / acc[3]) as u8, (acc[2] / acc[3]) as u8];
+                    self.blend(x as i32 + px, y as i32 + py, rgb, acc[3] / 255.0 * alpha);
+                }
             }
         }
-        w
     }
 
-    fn rect(&mut self, x: f32, y: f32, w: f32, h: f32, rgb: [u8; 3]) {
-        for py in y as i32..(y + h) as i32 {
-            for px in x as i32..(x + w) as i32 {
-                self.blend(px, py, rgb, 1.0);
+    fn round_rect(&mut self, x: f32, y: f32, w: f32, h: f32, r: f32, rgb: [u8; 3], alpha: f32) {
+        for py in 0..h.ceil() as i32 {
+            for px in 0..w.ceil() as i32 {
+                let (fx, fy) = (px as f32 + 0.5, py as f32 + 0.5);
+                let dx = (r - fx).max(fx - (w - r)).max(0.0);
+                let dy = (r - fy).max(fy - (h - r)).max(0.0);
+                let cover = (r + 0.5 - (dx * dx + dy * dy).sqrt()).clamp(0.0, 1.0);
+                self.blend(x as i32 + px, y as i32 + py, rgb, cover * alpha);
             }
         }
     }
 }
 
-/// Élément d'une ligne : texte (avec police et couleur), emote ou badge.
+/// Élément d'une ligne.
 enum Token {
     Text { text: String, bold: bool, rgb: [u8; 3] },
-    Emote(String, String),
-    Badge([u8; 3], char),
+    Image { img: Arc<image::RgbaImage>, w: f32, h: f32 },
+    Label(String),
 }
 
 fn measure(f: &fontdue::Font, text: &str, size: f32) -> f32 {
     text.chars().map(|c| f.metrics(c, size).advance_width).sum()
 }
 
-fn tokens(m: &Message) -> Vec<Token> {
+fn rgb3(c: [u8; 4]) -> [u8; 3] {
+    [c[0], c[1], c[2]]
+}
+
+fn tokens(m: &Message, st: &ChatStyle, images: &Images, size: f32) -> Vec<Token> {
     let mut out = Vec::new();
-    for b in &m.badges {
-        if let Some((label, rgb)) = crate::chat::badge(b) {
-            out.push(Token::Badge(rgb, label.chars().next().unwrap_or('•')));
+    let icon_px = size.round() as u32;
+    if m.system {
+        out.push(Token::Text { text: format!("[{}]", platform_name(&m.platform)), bold: true, rgb: [0x9a, 0xa0, 0xb4] });
+    } else {
+        if st.show_icons
+            && let Some(img) = platform_svg(&m.platform).and_then(|s| svg_image(&s, icon_px * 2))
+        {
+            out.push(Token::Image { img, w: size, h: size });
         }
+        if st.show_badges {
+            for b in &m.badges {
+                if let Some(img) = b.image.as_deref().and_then(|u| web_image(images, u)) {
+                    out.push(Token::Image { w: size * img.width() as f32 / img.height().max(1) as f32, img, h: size });
+                } else if let Some(img) = badge_svg(&b.kind).and_then(|s| svg_image(&s, icon_px * 2)) {
+                    out.push(Token::Image { img, w: size, h: size });
+                } else {
+                    out.push(Token::Label(b.label()));
+                }
+            }
+        }
+        out.push(Token::Text { text: m.username.clone(), bold: true, rgb: m.color.unwrap_or(rgb3(st.name_color)) });
+        out.push(Token::Text { text: ":".into(), bold: false, rgb: rgb3(st.text_color) });
     }
-    let name_rgb = m.color.unwrap_or(crate::chat::platform_color(&m.platform));
-    out.push(Token::Text { text: format!("{} ", m.username), bold: true, rgb: name_rgb });
     for p in &m.parts {
         match p {
             Part::Text(t) => {
-                // Mot par mot, pour pouvoir passer à la ligne.
-                for w in t.split_inclusive(' ') {
-                    out.push(Token::Text { text: w.to_string(), bold: false, rgb: [0xf2, 0xf3, 0xf7] });
+                for w in t.split_whitespace() {
+                    out.push(Token::Text { text: w.to_string(), bold: false, rgb: rgb3(st.text_color) });
                 }
             }
-            Part::Emote { name, url } => out.push(Token::Emote(name.clone(), url.clone())),
+            Part::Emote { name, url } => match web_image(images, url) {
+                Some(img) => {
+                    let h = size * 1.3;
+                    out.push(Token::Image { w: h * img.width() as f32 / img.height().max(1) as f32, img, h });
+                }
+                None => out.push(Token::Text { text: name.clone(), bold: false, rgb: rgb3(st.text_color) }),
+            },
         }
     }
     out
 }
 
-/// Dessine les messages (les plus récents en bas) dans une image RGBA.
-pub fn render(messages: &[Message], width: u32, height: u32, size: f32, background: [u8; 4], max: usize, images: &Images) -> Frame {
-    let f = fonts();
-    let (w, h) = (width.max(16) as i32, height.max(16) as i32);
-    let mut c = Canvas { w, h, data: background.iter().copied().cycle().take((w * h * 4) as usize).collect() };
-    let line_h = size * 1.35;
-    let pad = size * 0.5;
+/// Dessine les messages (les plus récents en bas) ; renvoie aussi le prochain instant où redessiner (fondu).
+pub fn render(messages: &[Message], st: &ChatStyle, images: &Images, now: Instant) -> (Frame, Option<Instant>) {
+    let f = fonts(&st.font);
+    let (w, h) = (st.width.max(50) as i32, st.height.max(50) as i32);
+    let mut c = Canvas { w, h, data: st.background.iter().copied().cycle().take((w * h * 4) as usize).collect() };
+    let size = st.size.max(8.0);
+    let line_h = (size * 1.4).round();
+    let pad = (size * 0.5).round();
+    let gap = size * 0.3;
     let max_w = w as f32 - pad * 2.0;
-    // Mise en page de chaque message en lignes (positions x, numéro de ligne).
-    let mut blocks: Vec<Vec<(f32, usize, Token)>> = Vec::new();
-    for m in messages.iter().rev().take(max.max(1)) {
-        let mut placed = Vec::new();
-        let (mut x, mut line) = (0.0f32, 0usize);
-        for t in tokens(m) {
+    let outline = if st.shadow { (size * 0.08).max(1.0) } else { 0.0 };
+    let life = Duration::from_secs(st.lifetime as u64);
+    let mut next: Option<Instant> = None;
+    let mut y = h as f32 - pad;
+    for m in messages.iter().rev().filter(|m| !m.divider && (!m.system || st.show_system)).take(st.max_messages.max(1) as usize) {
+        // Disparition : fondu pendant la dernière seconde.
+        let mut alpha = 1.0f32;
+        if st.lifetime > 0 {
+            let Some(at) = m.at else { continue };
+            let age = now.duration_since(at);
+            if age > life {
+                continue;
+            }
+            alpha = ((life - age).as_secs_f32()).min(1.0);
+            let fade = at + life.saturating_sub(Duration::from_secs(1));
+            let when = if fade > now { fade } else { now + Duration::from_millis(50) };
+            next = Some(next.map_or(when, |n| n.min(when)));
+        }
+        // Mise en page en lignes.
+        let mut rows: Vec<Vec<(f32, Token, f32)>> = vec![Vec::new()];
+        let mut x = 0.0f32;
+        for t in tokens(m, st, images, size) {
             let tw = match &t {
                 Token::Text { text, bold, .. } => measure(if *bold { &f.bold } else { &f.regular }, text, size),
-                Token::Emote(name, url) => emote(images, url)
-                    .map(|i| i.width() as f32 * size * 1.2 / i.height().max(1) as f32 + size * 0.2)
-                    .unwrap_or_else(|| measure(&f.regular, name, size) + size * 0.3),
-                Token::Badge(..) => size * 1.25,
+                Token::Image { w, .. } => *w,
+                Token::Label(l) => measure(&f.bold, l, size * 0.6) + size * 0.5,
             };
-            if x + tw > max_w && x > 0.0 {
+            let colon = matches!(&t, Token::Text { text, .. } if text == ":");
+            let space = if x > 0.0 && !colon { gap } else { 0.0 };
+            if x > 0.0 && x + space + tw > max_w {
+                rows.push(Vec::new());
                 x = 0.0;
-                line += 1;
+            } else {
+                x += space;
             }
-            placed.push((x, line, t));
+            rows.last_mut().unwrap().push((x, t, tw));
             x += tw;
         }
-        blocks.push(placed);
-    }
-    // Du bas vers le haut.
-    let mut bottom = h as f32 - pad;
-    for block in blocks {
-        let lines = block.last().map(|b| b.1 + 1).unwrap_or(1);
-        let top = bottom - lines as f32 * line_h;
-        if top < 0.0 {
-            break;
+        let height = rows.len() as f32 * line_h;
+        if y - height < 0.0 {
+            break; // pas de message coupé en haut
         }
-        for (x, line, t) in block {
-            let y = top + line as f32 * line_h;
-            let baseline = y + size * 1.05;
-            let x = pad + x;
-            match t {
-                Token::Text { text, bold, rgb } => {
-                    let font = if bold { &f.bold } else { &f.regular };
-                    let mut cx = x;
-                    for ch in text.chars() {
-                        cx += c.glyph(font, ch, cx, baseline, size, rgb);
-                    }
-                }
-                Token::Emote(name, url) => match emote(images, &url) {
-                    Some(img) => {
-                        c.image(&img, x, y + size * 0.05, size * 1.2);
-                    }
-                    None => {
+        y -= height;
+        for (r, row) in rows.into_iter().enumerate() {
+            let cy = y + r as f32 * line_h + line_h / 2.0;
+            for (x, t, tw) in row {
+                let x = pad + x;
+                match t {
+                    Token::Text { text, bold, rgb } => {
+                        let font = if bold { &f.bold } else { &f.regular };
+                        let baseline = cy + size * 0.35;
                         let mut cx = x;
-                        for ch in name.chars() {
-                            cx += c.glyph(&f.regular, ch, cx, baseline, size, [0xf2, 0xf3, 0xf7]);
+                        for ch in text.chars() {
+                            cx += c.glyph(font, ch, cx, baseline, size, rgb, alpha, outline);
                         }
                     }
-                },
-                Token::Badge(rgb, letter) => {
-                    let s = size * 1.05;
-                    c.rect(x, y + size * 0.15, s, s, rgb);
-                    c.glyph(&f.bold, letter, x + s * 0.28, y + size * 0.15 + s * 0.78, s * 0.7, [255, 255, 255]);
+                    Token::Image { img, w, h } => c.image(&img, x, cy - h / 2.0, w, h, alpha),
+                    Token::Label(l) => {
+                        let bh = size * 0.85;
+                        c.round_rect(x, cy - bh / 2.0, tw, bh, bh / 4.0, [0x4c, 0x7d, 0xff], 0.85 * alpha);
+                        let mut cx = x + size * 0.25;
+                        for ch in l.chars() {
+                            cx += c.glyph(&f.bold, ch, cx, cy + size * 0.22, size * 0.6, [255, 255, 255], alpha, 0.0);
+                        }
+                    }
                 }
             }
         }
-        bottom = top - size * 0.35;
+        y -= gap;
     }
-    Frame::new(w as u32, h as u32, c.data)
+    (Frame::new(w as u32, h as u32, c.data), next)
 }
 
-/// Redessine la source quand le chat ou ses réglages changent.
-pub fn start(chat: ChatHandle, width: u32, height: u32, size: f32, background: [u8; 4], max: u32, slot: Slot, status: Arc<Status>) {
+/// Redessine la source quand le chat, les images ou ses réglages changent.
+pub fn start(chat: ChatHandle, style: ChatStyle, slot: Slot, status: Arc<Status>) {
     std::thread::spawn(move || {
         let images: Images = Arc::default();
         let mut last = (u64::MAX, 0usize);
+        let mut next: Option<Instant> = None;
         while !status.stop.load(Ordering::Relaxed) {
             let v = chat.version.load(Ordering::Relaxed);
             let loaded = images.lock().values().filter(|i| i.is_some()).count();
-            if (v, loaded) != last {
+            let now = Instant::now();
+            if (v, loaded) != last || next.is_some_and(|n| now >= n) {
                 last = (v, loaded);
-                slot.set(render(&chat.messages(), width, height, size, background, max as usize, &images));
+                let (frame, n) = render(&chat.messages(), &style, &images, now);
+                next = n;
+                slot.set(frame);
             }
-            std::thread::sleep(Duration::from_millis(100));
+            std::thread::sleep(Duration::from_millis(50));
         }
     });
 }

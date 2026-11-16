@@ -54,13 +54,18 @@ droits administrateur, raccourcis sur le bureau et dans le menu Démarrer), ou
 - **Raccourcis clavier globaux** (même en jeu) : streaming, enregistrement,
   micro, son du bureau, transition, scène suivante/précédente.
 - **Import des collections OBS** (scènes, sources, positions, recadrages, volumes).
-- **Mises à jour automatiques** : une bannière propose la nouvelle préversion,
-  installée et relancée en un clic.
+- **Mises à jour automatiques** : vérifiées au démarrage puis toutes les
+  30 minutes, installées en arrière-plan (jamais pendant un live) et
+  appliquées au prochain lancement, ou tout de suite en un clic.
+- **Sources cachées arrêtées** : une caméra, une capture ou un média qui n'est
+  plus affiché est arrêté après 3 s (la caméra s'éteint), puis relancé.
 - **Restream** (votre application) : adresse d'envoi automatique et
   vérification du serveur RTMP, dock « Titre et catégorie » (titre, catégorie
   avec recherche, spectateurs par plateforme, mise à jour partout).
-- **Chat** : dock (Restream ou Twitch en direct), badges, emotes Twitch et Kick,
-  modération ; source « Chat » incrustée dans le stream.
+- **Chat** comme la version Electron : Restream, ou Twitch et Kick en direct
+  sans compte ; logos des plateformes, vraies images des badges, emotes,
+  mentions surlignées, messages système, modération ; source « Chat »
+  incrustée dans le stream (police, couleurs, contour, durée d'affichage).
 - **Fin du live** : récapitulatif (durée, messages, pic de spectateurs, images
   perdues, débit moyen) et historique des lives.
 - **Filtres audio** (gain, noise gate, compresseur) et **écoute au casque**

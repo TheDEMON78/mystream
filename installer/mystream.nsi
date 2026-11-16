@@ -15,6 +15,8 @@ RequestExecutionLevel user
 SetCompressor /SOLID lzma
 
 !define MUI_ABORTWARNING
+!define MUI_ICON "..\assets\icon.ico"
+!define MUI_UNICON "..\assets\icon.ico"
 !define MUI_FINISHPAGE_RUN "$INSTDIR\MyStream.exe"
 !define MUI_FINISHPAGE_RUN_TEXT "Lancer MyStream"
 !insertmacro MUI_PAGE_DIRECTORY

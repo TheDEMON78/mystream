@@ -4,12 +4,13 @@ mod control;
 mod edit;
 mod live;
 mod session;
+mod settings;
 
 use crate::audio::{DESKTOP, MIC, Mixer};
 use crate::capture::{self, Runtime};
 use crate::compositor::{Compositor, DrawItem};
 use crate::engine::{Engine, Shared, TransitionRun, key};
-use crate::model::{Filters, HOTKEY_ACTIONS, Project, Settings, SourceKind, TransitionKind};
+use crate::model::{Filters, Project, Settings, SourceKind, TransitionKind};
 use crate::output::{self, Kind};
 use crate::remote::Remote;
 use crate::theme::{self, Part};
@@ -36,12 +37,22 @@ pub struct App {
     mixer: Mixer,
     selected: Option<u64>,
     settings_open: bool,
+    settings_tab: settings::Tab,
+    /// Raccourci en cours de saisie (fenêtre Paramètres).
+    capturing_hotkey: Option<String>,
+    /// Mot de passe de la télécommande affiché en clair.
+    show_password: bool,
+    /// Vérification des mises à jour : dernière, et si elle a été demandée (Aide).
+    update_checked: Option<Instant>,
+    update_manual: bool,
     draft: Settings,
     notice: Option<(String, bool, Instant)>,
     dirty: Option<Instant>,
     renaming: Option<(u64, String)>,
     /// Scène à l'antenne lors de la dernière image (pour déclencher les transitions).
     shown: u64,
+    /// Dernière fois que chaque source était affichée (arrêt des sources cachées).
+    last_needed: HashMap<u64, Instant>,
     cameras: Option<Vec<String>>,
     /// Test automatique (MYSTREAM_AUTOTEST=<secondes>) : enregistre puis quitte.
     autotest: Option<(Instant, u64)>,
@@ -82,6 +93,7 @@ impl App {
         let mut app = Self {
             draft: project.settings.clone(),
             shown: project.current,
+            last_needed: HashMap::new(),
             project,
             runtimes: HashMap::new(),
             shared: Arc::new(Shared::default()),
@@ -92,6 +104,11 @@ impl App {
             mixer,
             selected: None,
             settings_open: false,
+            settings_tab: Default::default(),
+            capturing_hotkey: None,
+            show_password: false,
+            update_checked: None,
+            update_manual: false,
             notice: None,
             dirty: None,
             renaming: None,
@@ -117,10 +134,13 @@ impl App {
             last_backup: None,
             transform_open: false,
         };
-        crate::update::check(app.update.clone());
         app.start_engine(&cc.egui_ctx);
         app.chat.restart(&app.project.settings.chat, &app.project.settings.restream);
         app.apply_remote();
+        // Tests automatiques : MYSTREAM_TEST_SETTINGS=<onglet> ouvre les paramètres.
+        if let Some(n) = std::env::var("MYSTREAM_TEST_SETTINGS").ok().and_then(|v| v.parse::<usize>().ok()) {
+            app.open_settings_tab(settings::Tab::from_index(n));
+        }
         let errors = app.apply_hotkeys();
         if !errors.is_empty() {
             app.notify(format!("Raccourcis refusés : {}", errors.join(", ")), true);
@@ -171,11 +191,51 @@ impl App {
     }
 
     /// Démarre ou arrête les sources selon le projet ; règle les pistes du mixeur.
+    /// Sources affichées : scène à l'antenne, aperçu du mode studio et scène quittée
+    /// pendant une transition (éléments visibles seulement).
+    fn needed_sources(&self) -> std::collections::HashSet<u64> {
+        let mut scenes = vec![self.project.current, self.shown];
+        if self.project.settings.studio {
+            scenes.push(self.project.preview);
+        }
+        self.project
+            .scenes
+            .iter()
+            .filter(|sc| scenes.contains(&sc.id))
+            .flat_map(|sc| sc.items.iter().filter(|i| i.visible).map(|i| i.source))
+            .collect()
+    }
+
     fn sync_runtimes(&mut self) {
         let fps = self.project.settings.fps;
         let chat = self.chat.handle();
         self.runtimes.retain(|id, rt| self.project.sources.iter().any(|s| s.id == *id && s.kind == *rt.kind()));
+        // Comme la version Electron : une source coûteuse (caméra, capture, média,
+        // navigateur…) qui n'est plus affichée est arrêtée après quelques secondes
+        // (la caméra s'éteint), puis relancée quand elle revient à l'écran.
+        let needed = self.needed_sources();
+        let now = Instant::now();
+        let grace = Duration::from_secs(3) + Duration::from_millis(self.project.settings.transition.duration_ms as u64);
+        for id in &needed {
+            self.last_needed.insert(*id, now);
+        }
+        let idle: Vec<u64> = self
+            .project
+            .sources
+            .iter()
+            .filter(|s| s.kind.costly() && !needed.contains(&s.id))
+            .filter(|s| self.last_needed.get(&s.id).is_none_or(|t| now.duration_since(*t) > grace))
+            .map(|s| s.id)
+            .collect();
+        for id in &idle {
+            if self.runtimes.remove(id).is_some() {
+                log::info!("Source {id} arrêtée : elle n'est plus affichée");
+            }
+        }
         for s in &self.project.sources {
+            if idle.contains(&s.id) {
+                continue;
+            }
             if !self.runtimes.contains_key(&s.id) {
                 let track = s.kind.has_audio().then(|| self.mixer.track(s.id));
                 self.runtimes.insert(s.id, Runtime::start(&s.kind, fps, track, &chat));
@@ -325,8 +385,7 @@ impl App {
     }
 
     fn open_settings(&mut self) {
-        self.draft = self.project.settings.clone();
-        self.settings_open = true;
+        self.open_settings_tab(settings::Tab::General);
     }
 
     fn toggle_studio(&mut self) {
@@ -381,8 +440,7 @@ impl App {
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_centered(|ui| {
             ui.add_space(8.0);
-            let (r, _) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());
-            ui.painter().circle_filled(r.center(), 5.5, theme::DANGER);
+            ui.add(egui::Image::from_bytes("bytes://logo.png", include_bytes!("../assets/icon.png").as_slice()).fit_to_exact_size(vec2(20.0, 20.0)));
             ui.label(theme::title("MyStream"));
             ui.label(RichText::new(version_label()).color(theme::MUTED).size(12.0));
             ui.add_space(12.0);
@@ -478,6 +536,14 @@ impl App {
             });
             ui.menu_button("Aide", |ui| {
                 ui.label(RichText::new(format!("MyStream natif — {}", version_label())).color(theme::MUTED));
+                if ui.button("Rechercher des mises à jour").clicked() {
+                    ui.close();
+                    self.check_updates(true);
+                }
+                if ui.button("Plugin Stream Deck MyStream…").clicked() {
+                    ui.close();
+                    self.open_settings_tab(settings::Tab::StreamDeck);
+                }
                 if ui.button("Page du projet").clicked() {
                     ui.close();
                     open_path("https://github.com/TheDEMON78/mystream/tree/rust");
@@ -1142,7 +1208,7 @@ impl App {
         }
         if ui.button("💬 Chat (incrusté dans le stream)").clicked() {
             ui.close();
-            self.add("Chat", SourceKind::Chat { width: 420, height: 600, size: 22.0, background: [0, 0, 0, 0], max_messages: 15 });
+            self.add("Chat", SourceKind::Chat(Default::default()));
         }
         if ui.button("■ Couleur").clicked() {
             ui.close();
@@ -1282,20 +1348,35 @@ impl App {
             SourceKind::AppAudio { exe } => {
                 ui.label(format!("Programme : {exe}"));
             }
-            SourceKind::Chat { width, height, size, background, max_messages } => {
+            SourceKind::Chat(st) => {
                 ui.horizontal(|ui| {
                     ui.label("Taille");
-                    changed |= ui.add(egui::DragValue::new(width).range(100..=3840).suffix(" px")).changed();
+                    changed |= ui.add(egui::DragValue::new(&mut st.width).range(100..=3840).suffix(" px")).changed();
                     ui.label("×");
-                    changed |= ui.add(egui::DragValue::new(height).range(100..=2160).suffix(" px")).changed();
+                    changed |= ui.add(egui::DragValue::new(&mut st.height).range(100..=2160).suffix(" px")).changed();
                 });
-                changed |= ui.add(egui::Slider::new(size, 12.0..=64.0).text("Taille du texte")).changed();
-                changed |= ui.add(egui::Slider::new(max_messages, 1..=50).text("Messages au plus")).changed();
+                egui::ComboBox::from_label("Police").selected_text(st.font.as_str()).show_ui(ui, |ui| {
+                    for (f, _, _) in crate::model::CHAT_FONTS {
+                        changed |= ui.selectable_value(&mut st.font, f.to_string(), f).changed();
+                    }
+                });
+                changed |= ui.add(egui::Slider::new(&mut st.size, 8.0..=96.0).text("Taille du texte")).changed();
                 ui.horizontal(|ui| {
+                    ui.label("Texte");
+                    changed |= color(ui, &mut st.text_color);
+                    ui.label("Pseudos");
+                    changed |= color(ui, &mut st.name_color);
                     ui.label("Fond");
-                    changed |= color(ui, background);
+                    changed |= color(ui, &mut st.background);
                 });
-                ui.label(RichText::new("Le chat vient de Restream ou de Twitch (Paramètres > Chat).").small().color(theme::MUTED));
+                ui.label(RichText::new("Pseudos : couleur utilisée si la plateforme n'en fournit pas.").small().color(theme::MUTED));
+                changed |= ui.add(egui::Slider::new(&mut st.lifetime, 0..=600).text("Masquer après (s, 0 = jamais)")).changed();
+                changed |= ui.add(egui::Slider::new(&mut st.max_messages, 1..=100).text("Messages au plus")).changed();
+                changed |= ui.checkbox(&mut st.show_icons, "Logo de la plateforme").changed();
+                changed |= ui.checkbox(&mut st.show_badges, "Badges (modérateur, abonné…)").changed();
+                changed |= ui.checkbox(&mut st.show_system, "Messages système").changed();
+                changed |= ui.checkbox(&mut st.shadow, "Contour du texte").changed();
+                ui.label(RichText::new("Le chat vient de Restream, ou de Twitch et Kick en direct (Paramètres > Chat).").small().color(theme::MUTED));
             }
             SourceKind::Browser { url, width, height, css, audio } => {
                 // La page n'est rechargée qu'une fois la saisie terminée.
@@ -1448,17 +1529,60 @@ impl App {
         }
     }
 
+    /// Cherche une mise à jour ; `manual` : demandé par l'utilisateur (résultat affiché).
+    fn check_updates(&mut self, manual: bool) {
+        self.update_checked = Some(Instant::now());
+        self.update_manual = manual;
+        crate::update::check(self.update.clone());
+    }
+
+    /// Vérification régulière et installation automatique (appelé même fenêtre réduite).
+    fn update_tick(&mut self) {
+        use crate::update::State;
+        if self.update_checked.is_none_or(|t| t.elapsed() > Duration::from_secs(30 * 60)) {
+            self.check_updates(false);
+        }
+        let busy = !self.shared.outputs.lock().is_empty() || !self.pending.is_empty();
+        let state = self.update.lock().clone();
+        if let State::Available(a) = state
+            && self.project.settings.auto_update
+            && !busy
+        {
+            crate::update::install(self.update.clone(), a);
+        }
+    }
+
+    /// État des mises à jour en une phrase (onglet Général).
+    fn update_message(&self) -> Option<String> {
+        use crate::update::State;
+        Some(match self.update.lock().clone() {
+            State::Idle => return None,
+            State::Checking => "Recherche en cours…".into(),
+            State::UpToDate => "Vous avez la dernière version.".into(),
+            State::Available(a) => format!("Nouvelle version disponible : natif 0.1.{}.", a.number),
+            State::Downloading => "Téléchargement de la mise à jour…".into(),
+            State::Ready(n) => format!("Version natif 0.1.{n} installée : elle sera utilisée au prochain lancement."),
+            State::Failed(e) => format!("Mise à jour : {e}."),
+        })
+    }
+
     fn update_banner(&mut self, ui: &mut egui::Ui) {
         use crate::update::State;
         let state = self.update.lock().clone();
         let busy = !self.shared.outputs.lock().is_empty();
         match state {
-            State::Idle => {}
+            State::Idle | State::Checking => {}
+            State::UpToDate => {
+                if self.update_manual {
+                    self.update_manual = false;
+                    self.notify("Vous avez la dernière version de MyStream.", false);
+                }
+            }
             State::Available(a) => {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(format!("Une nouvelle version est disponible (natif 0.1.{}).", a.number)).color(OK));
-                    let b = ui.add_enabled(!busy, egui::Button::new("Installer et redémarrer"));
-                    let b = if busy { b.on_disabled_hover_text("Arrêtez le streaming et l'enregistrement d'abord") } else { b };
+                    ui.label(RichText::new(format!("Nouvelle version disponible (natif 0.1.{}).", a.number)).color(OK));
+                    let b = ui.add_enabled(!busy, egui::Button::new("Installer"));
+                    let b = if busy { b.on_disabled_hover_text("Elle s'installera à la fin du live ou de l'enregistrement") } else { b };
                     if b.clicked() {
                         crate::update::install(self.update.clone(), a.clone());
                     }
@@ -1467,206 +1591,31 @@ impl App {
             State::Downloading => {
                 ui.label(RichText::new("Téléchargement de la mise à jour…").color(WARN));
             }
-            State::Ready => {
-                self.project.save();
-                crate::update::restart();
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+            State::Ready(n) => {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(format!("MyStream natif 0.1.{n} est installé.")).color(OK));
+                    let b = ui.add_enabled(!busy, egui::Button::new("Redémarrer maintenant"));
+                    let b = if busy { b.on_disabled_hover_text("Arrêtez le streaming et l'enregistrement d'abord") } else { b.on_hover_text("Sinon, la nouvelle version sera utilisée au prochain lancement") };
+                    if b.clicked() {
+                        self.project.save();
+                        crate::update::restart();
+                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                });
             }
             State::Failed(e) => {
-                ui.label(RichText::new(format!("La mise à jour a échoué : {e}")).color(LIVE));
-            }
-        }
-    }
-
-    fn settings_window(&mut self, ctx: &egui::Context) {
-        if !self.settings_open {
-            return;
-        }
-        let mut open = true;
-        let mut apply = false;
-        let mut cancel = false;
-        let busy = !self.shared.outputs.lock().is_empty();
-        let test = self.live.test.clone();
-        egui::Window::new("Paramètres").open(&mut open).resizable(false).collapsible(false).show(ctx, |ui| {
-            egui::ScrollArea::vertical().max_height(ctx.content_rect().height() - 140.0).show(ui, |ui| {
-                let d = &mut self.draft;
-                ui.heading("Vidéo");
-                ui.add_enabled_ui(!busy, |ui| {
-                    egui::Grid::new("video").num_columns(2).show(ui, |ui| {
-                        ui.label("Résolution");
-                        egui::ComboBox::from_id_salt("res").selected_text(format!("{} × {}", d.width, d.height)).show_ui(ui, |ui| {
-                            for (w, h) in RESOLUTIONS {
-                                if ui.selectable_label(d.width == w && d.height == h, format!("{w} × {h}")).clicked() {
-                                    d.width = w;
-                                    d.height = h;
-                                }
-                            }
-                        });
-                        ui.end_row();
-                        ui.label("Images par seconde");
-                        egui::ComboBox::from_id_salt("fps").selected_text(d.fps.to_string()).show_ui(ui, |ui| {
-                            for f in [30, 48, 50, 60] {
-                                ui.selectable_value(&mut d.fps, f, f.to_string());
-                            }
-                        });
-                        ui.end_row();
-                    });
-                });
-                if busy {
-                    ui.label(RichText::new("Arrêtez le streaming et l'enregistrement pour changer la vidéo.").small().weak());
-                }
-                ui.separator();
-                ui.heading("Stream");
-                egui::Grid::new("stream").num_columns(2).show(ui, |ui| {
-                    ui.label("Service");
-                    egui::ComboBox::from_id_salt("service")
-                        .selected_text(if d.stream.service == "restream" { "Restream (votre application)" } else { "Serveur RTMP personnalisé" })
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut d.stream.service, "restream".to_string(), "Restream (votre application)");
-                            ui.selectable_value(&mut d.stream.service, "custom".to_string(), "Serveur RTMP personnalisé");
-                        });
-                    ui.end_row();
-                    if d.stream.service != "restream" {
-                        ui.label("Serveur RTMP");
-                        ui.add(egui::TextEdit::singleline(&mut d.stream.server).hint_text("rtmp://live.twitch.tv/app").desired_width(320.0));
-                        ui.end_row();
-                        ui.label("Clé de stream");
-                        ui.add(egui::TextEdit::singleline(&mut d.stream.key).password(true).desired_width(320.0));
-                    }
-                    ui.end_row();
-                    ui.label("Débit vidéo (kb/s)");
-                    ui.add(egui::DragValue::new(&mut d.stream.video_bitrate).range(500..=50000).speed(50));
-                    ui.end_row();
-                    ui.label("Débit audio (kb/s)");
-                    egui::ComboBox::from_id_salt("ab").selected_text(d.stream.audio_bitrate.to_string()).show_ui(ui, |ui| {
-                        for b in [96, 128, 160, 192, 256, 320] {
-                            ui.selectable_value(&mut d.stream.audio_bitrate, b, b.to_string());
-                        }
-                    });
-                    ui.end_row();
-                    ui.label("Encodeur");
-                    egui::ComboBox::from_id_salt("enc").selected_text(output::encoder_label(&d.stream.encoder)).show_ui(ui, |ui| {
-                        ui.selectable_value(&mut d.stream.encoder, "auto".to_string(), output::encoder_label("auto"));
-                        for e in output::encoders() {
-                            ui.selectable_value(&mut d.stream.encoder, e.clone(), output::encoder_label(e));
-                        }
-                    });
-                    ui.end_row();
-                });
-                ui.separator();
-                ui.heading("Enregistrement");
-                egui::Grid::new("rec").num_columns(2).show(ui, |ui| {
-                    ui.label("Dossier");
-                    ui.horizontal(|ui| {
-                        ui.add(egui::TextEdit::singleline(&mut d.record.folder).desired_width(260.0));
-                        if ui.button("Parcourir…").clicked()
-                            && let Some(p) = rfd::FileDialog::new().set_directory(&d.record.folder).pick_folder()
-                        {
-                            d.record.folder = p.to_string_lossy().into_owned();
-                        }
-                    });
-                    ui.end_row();
-                    ui.label("Format");
-                    egui::ComboBox::from_id_salt("fmt").selected_text(d.record.format.to_uppercase()).show_ui(ui, |ui| {
-                        ui.selectable_value(&mut d.record.format, "mkv".to_string(), "MKV (résiste aux coupures, recommandé)");
-                        ui.selectable_value(&mut d.record.format, "mp4".to_string(), "MP4");
-                    });
-                    ui.end_row();
-                    ui.label("Débit vidéo (kb/s)");
-                    ui.add(egui::DragValue::new(&mut d.record.video_bitrate).range(2000..=150000).speed(100));
-                    ui.end_row();
-                });
-                ui.separator();
-                Self::restream_settings(ui, d, &test);
-                ui.separator();
-                ui.heading("Contrôle à distance (Stream Deck)");
-                ui.label(RichText::new("Compatible obs-websocket 5 : plugin MyStream ou plugins OBS du Stream Deck, Touch Portal, Companion…").small().weak());
-                egui::Grid::new("remote").num_columns(2).show(ui, |ui| {
-                    ui.label("Activer");
-                    ui.checkbox(&mut d.remote.enabled, "");
-                    ui.end_row();
-                    ui.label("Port");
-                    ui.add(egui::DragValue::new(&mut d.remote.port).range(1024..=65535));
-                    ui.end_row();
-                    ui.label("Mot de passe");
-                    ui.horizontal(|ui| {
-                        ui.add(egui::TextEdit::singleline(&mut d.remote.password).desired_width(200.0));
-                        if ui.button("Copier").clicked() {
-                            ui.ctx().copy_text(d.remote.password.clone());
-                        }
-                    });
-                    ui.end_row();
-                    ui.label("Réseau local");
-                    ui.checkbox(&mut d.remote.lan, "Accepter les autres appareils du réseau (téléphone, tablette)");
-                    ui.end_row();
-                });
-                ui.separator();
-                ui.heading("Raccourcis clavier (fonctionnent même en jeu)");
-                ui.label(RichText::new("Exemples : ctrl+shift+KeyS, alt+F9, ctrl+Digit1. Laissez vide pour aucun raccourci.").small().weak());
-                egui::Grid::new("hotkeys").num_columns(2).show(ui, |ui| {
-                    for (action, label) in HOTKEY_ACTIONS {
-                        ui.label(label);
-                        let v = d.hotkeys.entry(action.to_string()).or_default();
-                        ui.add(egui::TextEdit::singleline(v).desired_width(180.0));
-                        ui.end_row();
-                    }
-                });
-                ui.separator();
-                ui.horizontal(|ui| {
-                    if ui.button(RichText::new("Appliquer").strong()).clicked() {
-                        apply = true;
-                    }
-                    if ui.button("Annuler").clicked() {
-                        cancel = true;
-                    }
-                });
-            });
-        });
-        if apply {
-            let s = &self.project.settings;
-            let video = (self.draft.width, self.draft.height, self.draft.fps) != (s.width, s.height, s.fps);
-            // Le mixeur, la transition et le mode studio ont pu changer pendant que la fenêtre était ouverte.
-            let (audio, transition, studio) = (s.audio.clone(), s.transition.clone(), s.studio);
-            let remote_changed = {
-                let (a, b) = (&self.draft.remote, &s.remote);
-                (a.enabled, a.port, &a.password, a.lan) != (b.enabled, b.port, &b.password, b.lan)
-            };
-            let hotkeys_changed = self.draft.hotkeys != s.hotkeys;
-            let chat_changed = self.draft.chat != s.chat || self.draft.restream != s.restream;
-            self.project.settings = self.draft.clone();
-            self.project.settings.audio = audio;
-            self.project.settings.transition = transition;
-            self.project.settings.studio = studio;
-            if video {
-                self.runtimes.clear(); // les captures repartent à la nouvelle cadence
-                self.shared.sizes.lock().clear();
-                self.start_engine(ctx);
-            }
-            self.touch();
-            self.notify("Paramètres enregistrés.", false);
-            if remote_changed {
-                self.apply_remote();
-            }
-            if chat_changed {
-                self.chat.restart(&self.project.settings.chat, &self.project.settings.restream);
-                self.live = Default::default();
-            }
-            if hotkeys_changed {
-                let errors = self.apply_hotkeys();
-                if !errors.is_empty() {
-                    self.notify(format!("Raccourcis refusés : {}", errors.join(", ")), true);
+                if self.update_manual {
+                    ui.label(RichText::new(format!("Mise à jour : {e}")).color(LIVE));
                 }
             }
-        }
-        if !open || apply || cancel {
-            self.settings_open = false;
         }
     }
 }
 
 impl eframe::App for App {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let ctx = ui.ctx().clone();
+    /// Appelé aussi quand la fenêtre est réduite (en jeu) : Stream Deck,
+    /// raccourcis globaux et sorties doivent continuer de fonctionner.
+    fn logic(&mut self, _ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.sync_runtimes();
         self.poll_outputs();
         self.check_outputs();
@@ -1675,6 +1624,16 @@ impl eframe::App for App {
         self.handle_remote();
         self.handle_hotkeys();
         self.update_items();
+        self.update_tick();
+        if self.dirty.is_some_and(|t| t.elapsed() > Duration::from_secs(1)) {
+            self.record_undo();
+            self.project.save();
+            self.dirty = None;
+        }
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
 
         let bar = |fill| egui::Frame::new().fill(fill);
         egui::Panel::top("menu").exact_size(36.0).frame(bar(theme::BG).stroke(egui::Stroke::new(1.0, theme::BORDER))).show(ui, |ui| self.top_bar(ui));
@@ -1725,11 +1684,6 @@ impl eframe::App for App {
                 log::info!("Test : {:.1} i/s, rendu {:.2} ms, {} manquée(s), {} perdue(s)", st.fps, st.render_ms, st.lagged, st.dropped);
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
-        }
-        if self.dirty.is_some_and(|t| t.elapsed() > Duration::from_secs(1)) {
-            self.record_undo();
-            self.project.save();
-            self.dirty = None;
         }
     }
 
