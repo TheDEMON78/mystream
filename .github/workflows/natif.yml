@@ -1,0 +1,42 @@
+name: MyStream natif (Windows)
+
+# Chaque envoi sur la branche « rust » produit une préversion téléchargeable :
+# MyStream.exe + FFmpeg (avec NVENC, Quick Sync et AMF) dans un zip.
+on:
+  push:
+    branches: [rust]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Compiler
+        run: cargo build --release
+      - name: Récupérer FFmpeg
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip -OutFile ffmpeg.zip
+          Expand-Archive ffmpeg.zip -DestinationPath ffmpeg
+          New-Item -ItemType Directory -Force -Path paquet | Out-Null
+          Copy-Item target\release\MyStream.exe paquet\
+          Get-ChildItem -Recurse ffmpeg -Filter ffmpeg.exe | Select-Object -First 1 | Copy-Item -Destination paquet\
+          Copy-Item README.md paquet\LISEZMOI.md
+          Compress-Archive -Path paquet\* -DestinationPath MyStream-natif-win64.zip
+      - name: Publier la préversion
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: natif-v0.1.${{ github.run_number }}
+          name: MyStream natif 0.1.${{ github.run_number }} (préversion)
+          target_commitish: ${{ github.sha }}
+          prerelease: true
+          body: |
+            Version native de MyStream, écrite en Rust (branche « rust »). Préversion à tester.
+            Décompressez le zip et lancez MyStream.exe (FFmpeg est inclus).
+          files: MyStream-natif-win64.zip
