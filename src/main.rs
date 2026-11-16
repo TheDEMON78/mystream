@@ -14,6 +14,7 @@ mod model;
 mod obs_import;
 mod output;
 mod remote;
+mod theme;
 mod update;
 
 fn main() -> eframe::Result {

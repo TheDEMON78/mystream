@@ -9,16 +9,16 @@ use crate::engine::{Engine, Shared, TransitionRun, key};
 use crate::model::{Filters, HOTKEY_ACTIONS, Project, Settings, SourceKind, TransitionKind};
 use crate::output::{self, Kind, Output};
 use crate::remote::Remote;
+use crate::theme::{self, Part};
 use egui::{Color32, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Vec2, pos2, vec2};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const RESOLUTIONS: [(u32, u32); 5] = [(1920, 1080), (2560, 1440), (1600, 900), (1280, 720), (3840, 2160)];
-const ACCENT: Color32 = Color32::from_rgb(0x8b, 0x5c, 0xf6);
-const LIVE: Color32 = Color32::from_rgb(0xe5, 0x48, 0x4d);
-const WARN: Color32 = Color32::from_rgb(0xf5, 0x9e, 0x0b);
-const OK: Color32 = Color32::from_rgb(0x22, 0xc5, 0x5e);
+const LIVE: Color32 = theme::DANGER;
+const WARN: Color32 = theme::WARN;
+const OK: Color32 = theme::SUCCESS;
 const IMAGES: [&str; 6] = ["png", "jpg", "jpeg", "gif", "bmp", "webp"];
 const MEDIAS: [&str; 10] = ["mp4", "mkv", "mov", "webm", "avi", "flv", "mp3", "wav", "ogg", "m4a"];
 
@@ -48,10 +48,12 @@ pub struct App {
     hotkey_manager: Option<global_hotkey::GlobalHotKeyManager>,
     hotkeys: Vec<(global_hotkey::hotkey::HotKey, &'static str)>,
     update: crate::update::Shared,
+    preview_hidden: bool,
 }
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        theme::apply(&cc.egui_ctx);
         let render_state = cc.wgpu_render_state.clone().expect("MyStream nécessite le rendu wgpu");
         let project = Project::load();
         let mixer = Mixer::new();
@@ -82,6 +84,7 @@ impl App {
             hotkey_manager: None,
             hotkeys: Vec::new(),
             update: Default::default(),
+            preview_hidden: false,
         };
         crate::update::check(app.update.clone());
         app.start_engine(&cc.egui_ctx);
@@ -250,201 +253,570 @@ impl App {
         }
     }
 
-    /* Panneaux ------------------------------------------------------------- */
+    /* Panneaux (même disposition que la version Electron) ------------------- */
 
-    fn scenes_panel(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Scènes");
-        ui.separator();
-        let studio = self.project.settings.studio;
-        let mut pick = None;
-        let ids: Vec<(u64, String)> = self.project.scenes.iter().map(|s| (s.id, s.name.clone())).collect();
-        for (id, name) in ids {
-            if let Some((rid, text)) = &mut self.renaming
-                && *rid == id
-            {
-                let r = ui.text_edit_singleline(text);
-                if r.lost_focus() {
-                    let new = text.trim().to_string();
-                    if !new.is_empty()
-                        && let Some(s) = self.project.scene_mut(id)
-                    {
-                        s.name = new;
-                    }
-                    self.renaming = None;
-                    self.touch();
-                } else {
-                    r.request_focus();
-                }
-                continue;
-            }
-            let selected = if studio { self.project.preview == id } else { self.project.current == id };
-            let mut text = RichText::new(&name);
-            if studio && self.project.current == id {
-                text = text.color(LIVE); // à l'antenne
-            }
-            let r = ui.selectable_label(selected, text);
-            if r.clicked() {
-                pick = Some(id);
-            }
-            if r.double_clicked() {
-                if studio {
-                    // Double-clic en mode studio : passe directement à l'antenne.
-                    self.project.current = id;
-                } else {
-                    self.renaming = Some((id, name.clone()));
-                }
-            }
+    fn import_obs(&mut self) {
+        let mut dlg = rfd::FileDialog::new().add_filter("Collection OBS", &["json"]);
+        if let Some(dir) = crate::obs_import::obs_folder() {
+            dlg = dlg.set_directory(dir);
         }
-        if let Some(id) = pick {
-            if studio {
-                self.project.preview = id;
-            } else {
-                self.project.current = id;
-            }
-            self.selected = None;
-            self.touch();
-        }
-        ui.separator();
-        ui.horizontal(|ui| {
-            if ui.button("➕").on_hover_text("Ajouter une scène").clicked() {
-                let id = self.project.add_scene();
-                if studio {
-                    self.project.preview = id;
-                } else {
-                    self.project.current = id;
+        let Some(path) = dlg.pick_file() else { return };
+        match crate::obs_import::import(&path, &mut self.project) {
+            Ok(r) => {
+                let mut msg = format!("Importé depuis OBS : {} scène(s), {} source(s).", r.scenes, r.sources);
+                if !r.skipped.is_empty() {
+                    let list: Vec<String> = r.skipped.iter().map(|(k, n)| format!("{} × {}", n, crate::obs_import::obs_type_label(k))).collect();
+                    msg.push_str(&format!(" Non prises en charge : {}.", list.join(", ")));
                 }
+                self.notify(msg, false);
                 self.touch();
             }
-            if ui.add_enabled(self.project.scenes.len() > 1, egui::Button::new("➖")).on_hover_text("Supprimer la scène").clicked() {
-                let id = self.project.edit_scene();
-                self.project.remove_scene(id);
-                self.touch();
-            }
-            if ui.button("✏").on_hover_text("Renommer").clicked() {
-                let id = self.project.edit_scene();
-                let name = self.project.scene(id).map(|s| s.name.clone()).unwrap_or_default();
-                self.renaming = Some((id, name));
-            }
-        });
-        ui.separator();
-        ui.label(RichText::new("Transition").strong());
-        let t = &mut self.project.settings.transition;
-        let mut changed = false;
-        egui::ComboBox::from_id_salt("transition").selected_text(t.kind.label()).show_ui(ui, |ui| {
-            for k in [TransitionKind::Cut, TransitionKind::Fade, TransitionKind::Slide] {
-                changed |= ui.selectable_value(&mut t.kind, k, k.label()).changed();
-            }
-        });
-        if t.kind != TransitionKind::Cut {
-            changed |= ui.add(egui::Slider::new(&mut t.duration_ms, 100..=2000).suffix(" ms").text("Durée")).changed();
-        }
-        if changed {
-            self.touch();
-        }
-        ui.separator();
-        if ui.button("📥 Importer depuis OBS…").on_hover_text("Ajoute les scènes et sources d'une collection OBS").clicked() {
-            let mut dlg = rfd::FileDialog::new().add_filter("Collection OBS", &["json"]);
-            if let Some(dir) = crate::obs_import::obs_folder() {
-                dlg = dlg.set_directory(dir);
-            }
-            if let Some(path) = dlg.pick_file() {
-                match crate::obs_import::import(&path, &mut self.project) {
-                    Ok(r) => {
-                        let mut msg = format!("Importé depuis OBS : {} scène(s), {} source(s).", r.scenes, r.sources);
-                        if !r.skipped.is_empty() {
-                            let list: Vec<String> = r.skipped.iter().map(|(k, n)| format!("{} × {}", n, crate::obs_import::obs_type_label(k))).collect();
-                            msg.push_str(&format!(" Non prises en charge : {}.", list.join(", ")));
-                        }
-                        self.notify(msg, false);
-                        self.touch();
-                    }
-                    Err(e) => self.notify(format!("Import OBS impossible : {e}"), true),
-                }
-            }
+            Err(e) => self.notify(format!("Import OBS impossible : {e}"), true),
         }
     }
 
-    fn sources_panel(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Sources");
-        ui.separator();
+    fn open_settings(&mut self) {
+        self.draft = self.project.settings.clone();
+        self.settings_open = true;
+    }
+
+    fn toggle_studio(&mut self) {
+        self.project.settings.studio = !self.project.settings.studio;
+        self.project.preview = self.project.current;
+        self.touch();
+    }
+
+    /// Action sur l'élément sélectionné (menu Édition, barre sous l'aperçu).
+    fn item_action(&mut self, what: &str) {
         let scene_id = self.project.edit_scene();
-        let items: Vec<(u64, u64, bool)> =
-            self.project.scene(scene_id).map(|s| s.items.iter().map(|i| (i.id, i.source, i.visible)).collect()).unwrap_or_default();
-        if items.is_empty() {
-            ui.label(RichText::new("Cliquez sur « Ajouter » pour ajouter une source.").weak());
+        let Some(sel) = self.selected else { return };
+        if what == "remove" {
+            self.project.remove_item(scene_id, sel);
+            self.selected = None;
+            self.touch();
+            return;
         }
-        let mut action: Option<(&str, u64)> = None;
-        egui::ScrollArea::vertical().id_salt("sources").max_height(260.0).show(ui, |ui| {
-            for (item, source, visible) in &items {
-                let Some(src) = self.project.source(*source) else {
-                    continue;
-                };
-                let rt = self.runtimes.get(source);
-                let status = rt.and_then(|r| r.error());
-                let info = rt.and_then(|r| r.info());
-                let shared = self.project.scenes.iter().filter(|s| s.items.iter().any(|i| i.source == *source)).count() > 1;
-                ui.horizontal(|ui| {
-                    let eye = if *visible { "👁" } else { "⊘" };
-                    if ui.small_button(eye).on_hover_text(if *visible { "Masquer" } else { "Afficher" }).clicked() {
-                        action = Some(("visible", *item));
+        let sizes = self.shared.sizes.lock().clone();
+        let (cw, ch) = (self.canvas.0 as f32, self.canvas.1 as f32);
+        let crops: HashMap<u64, [u32; 4]> = self.project.sources.iter().map(|s| (s.id, s.filters.crop)).collect();
+        let Some(scene) = self.project.scene_mut(scene_id) else { return };
+        let Some(item) = scene.items.iter_mut().find(|i| i.id == sel) else { return };
+        let Some(&(w, h)) = sizes.get(&item.source) else { return };
+        let c = crops.get(&item.source).copied().unwrap_or([0; 4]);
+        let (w, h) = (w.saturating_sub(c[0] + c[2]).max(1) as f32, h.saturating_sub(c[1] + c[3]).max(1) as f32);
+        match what {
+            "fit" => {
+                let s = (cw / w).min(ch / h);
+                item.scale = Some(s);
+                item.x = (cw - w * s) / 2.0;
+                item.y = (ch - h * s) / 2.0;
+            }
+            "original" => item.scale = Some(1.0),
+            "center" => {
+                let s = item.scale.unwrap_or(1.0);
+                item.x = (cw - w * s) / 2.0;
+                item.y = (ch - h * s) / 2.0;
+            }
+            _ => {}
+        }
+        self.touch();
+    }
+
+    fn top_bar(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_centered(|ui| {
+            ui.add_space(8.0);
+            let (r, _) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());
+            ui.painter().circle_filled(r.center(), 5.5, theme::DANGER);
+            ui.label(theme::title("MyStream"));
+            ui.label(RichText::new(version_label()).color(theme::MUTED).size(12.0));
+            ui.add_space(12.0);
+            egui::MenuBar::new().ui(ui, |ui| self.menus(ui));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.add_space(10.0);
+                ui.label(theme::title(self.project.scene(self.project.current).map(|s| s.name.clone()).unwrap_or_default()));
+                ui.label(RichText::new("À l'antenne :").color(theme::MUTED));
+            });
+        });
+    }
+
+    fn menus(&mut self, ui: &mut egui::Ui) {
+        {
+            ui.menu_button("Fichier", |ui| {
+                if ui.button("Importer depuis OBS…").clicked() {
+                    ui.close();
+                    self.import_obs();
+                }
+                if ui.button("Ouvrir le dossier des enregistrements").clicked() {
+                    ui.close();
+                    open_path(&self.project.settings.record.folder);
+                }
+                if ui.button("Paramètres…").clicked() {
+                    ui.close();
+                    self.open_settings();
+                }
+                ui.separator();
+                if ui.button("Quitter").clicked() {
+                    ui.close();
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            });
+            ui.menu_button("Édition", |ui| {
+                let has = self.selected.is_some();
+                for (what, label) in
+                    [("fit", "Ajuster à l'écran"), ("original", "Taille d'origine"), ("center", "Centrer à l'écran"), ("remove", "Retirer de la scène")]
+                {
+                    if ui.add_enabled(has, egui::Button::new(label)).clicked() {
+                        ui.close();
+                        self.item_action(what);
                     }
-                    let mut text = format!("{} {}", src.kind.glyph(), src.name);
-                    if shared {
-                        text.push_str(" 🔗");
-                    }
-                    let mut label = RichText::new(text);
-                    if status.is_some() {
-                        label = label.color(WARN);
-                    }
-                    let r = ui.selectable_label(self.selected == Some(*item), label);
-                    let hover = [status.clone(), info.clone(), shared.then(|| "Source partagée avec d'autres scènes".to_string())]
-                        .into_iter()
-                        .flatten()
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    let r = if hover.is_empty() { r } else { r.on_hover_text(hover) };
-                    if r.clicked() {
-                        self.selected = Some(*item);
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("🗑").on_hover_text("Retirer de la scène").clicked() {
-                            action = Some(("remove", *item));
-                        }
-                        if ui.small_button("⏷").on_hover_text("Descendre").clicked() {
-                            action = Some(("down", *item));
-                        }
-                        if ui.small_button("⏶").on_hover_text("Monter").clicked() {
-                            action = Some(("up", *item));
-                        }
-                    });
+                }
+            });
+            ui.menu_button("Affichage", |ui| {
+                if ui.button(if self.project.settings.studio { "✔ Mode studio" } else { "Mode studio" }).clicked() {
+                    ui.close();
+                    self.toggle_studio();
+                }
+                if ui.button(if self.preview_hidden { "Afficher l'aperçu" } else { "Masquer l'aperçu" }).clicked() {
+                    ui.close();
+                    self.preview_hidden = !self.preview_hidden;
+                }
+            });
+            ui.menu_button("Aide", |ui| {
+                ui.label(RichText::new(format!("MyStream natif — {}", version_label())).color(theme::MUTED));
+                if ui.button("Page du projet").clicked() {
+                    ui.close();
+                    open_path("https://github.com/TheDEMON78/mystream/tree/rust");
+                }
+            });
+        }
+    }
+
+    fn docks(&mut self, ui: &mut egui::Ui) {
+        let h = ui.available_height().max(0.0);
+        let gap = 6.0;
+        let fixed = [230.0, 295.0, 205.0, 228.0];
+        let mixer_w = (ui.available_width() - fixed.iter().sum::<f32>() - gap * 4.0).max(220.0);
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing.x = gap;
+            for (w, which) in [(fixed[0], 0), (fixed[1], 1), (mixer_w, 2), (fixed[2], 3), (fixed[3], 4)] {
+                ui.allocate_ui_with_layout(vec2(w, h), egui::Layout::top_down(egui::Align::Min), |ui| match which {
+                    0 => self.scenes_dock(ui),
+                    1 => self.sources_dock(ui),
+                    2 => self.mixer_dock(ui),
+                    3 => self.transitions_dock(ui),
+                    _ => self.commands_dock(ui),
                 });
-                if let Some(i) = info {
-                    ui.label(RichText::new(format!("      {i}")).small().weak());
+            }
+        });
+    }
+
+    fn scenes_dock(&mut self, ui: &mut egui::Ui) {
+        let studio = self.project.settings.studio;
+        theme::dock(ui, "Scènes", true, |ui, part| match part {
+            Part::Body => {
+                let mut pick = None;
+                let ids: Vec<(u64, String)> = self.project.scenes.iter().map(|s| (s.id, s.name.clone())).collect();
+                for (id, name) in ids {
+                    if let Some((rid, text)) = &mut self.renaming
+                        && *rid == id
+                    {
+                        let r = ui.add(egui::TextEdit::singleline(text).desired_width(f32::INFINITY));
+                        if r.lost_focus() {
+                            let new = text.trim().to_string();
+                            if !new.is_empty()
+                                && let Some(s) = self.project.scene_mut(id)
+                            {
+                                s.name = new;
+                            }
+                            self.renaming = None;
+                            self.touch();
+                        } else {
+                            r.request_focus();
+                        }
+                        continue;
+                    }
+                    let selected = if studio { self.project.preview == id } else { self.project.current == id };
+                    let mut text = RichText::new(&name);
+                    if studio && self.project.current == id {
+                        text = text.color(theme::DANGER); // à l'antenne
+                    }
+                    let r = ui.add(egui::Button::selectable(selected, text).min_size(vec2(ui.available_width(), 26.0)));
+                    if r.clicked() {
+                        pick = Some(id);
+                    }
+                    if r.double_clicked() {
+                        if studio {
+                            self.project.current = id; // double-clic en mode studio : à l'antenne
+                        } else {
+                            self.renaming = Some((id, name.clone()));
+                        }
+                    }
+                }
+                if let Some(id) = pick {
+                    if studio {
+                        self.project.preview = id;
+                    } else {
+                        self.project.current = id;
+                    }
+                    self.selected = None;
+                    self.touch();
+                }
+            }
+            Part::Footer => {
+                if theme::tool(ui, "+", "Ajouter une scène") {
+                    let id = self.project.add_scene();
+                    if studio {
+                        self.project.preview = id;
+                    } else {
+                        self.project.current = id;
+                    }
+                    self.touch();
+                }
+                if self.project.scenes.len() > 1 && theme::tool(ui, "−", "Supprimer la scène") {
+                    let id = self.project.edit_scene();
+                    self.project.remove_scene(id);
+                    self.touch();
+                }
+                if theme::tool(ui, "✏", "Renommer la scène (ou double-clic)") {
+                    let id = self.project.edit_scene();
+                    let name = self.project.scene(id).map(|s| s.name.clone()).unwrap_or_default();
+                    self.renaming = Some((id, name));
+                }
+                for (icon, tip, delta) in [("⏶", "Monter", -1i32), ("⏷", "Descendre", 1)] {
+                    if theme::tool(ui, icon, tip) {
+                        let id = self.project.edit_scene();
+                        let list = &mut self.project.scenes;
+                        if let Some(i) = list.iter().position(|s| s.id == id) {
+                            let j = i as i32 + delta;
+                            if j >= 0 && (j as usize) < list.len() {
+                                list.swap(i, j as usize);
+                                self.touch();
+                            }
+                        }
+                    }
                 }
             }
         });
-        if let Some((what, id)) = action {
-            if what == "remove" {
-                self.project.remove_item(scene_id, id);
-                if self.selected == Some(id) {
-                    self.selected = None;
+    }
+
+    fn sources_dock(&mut self, ui: &mut egui::Ui) {
+        let scene_id = self.project.edit_scene();
+        theme::dock(ui, "Sources", true, |ui, part| match part {
+            Part::Body => {
+                let items: Vec<(u64, u64, bool)> =
+                    self.project.scene(scene_id).map(|s| s.items.iter().map(|i| (i.id, i.source, i.visible)).collect()).unwrap_or_default();
+                if items.is_empty() {
+                    ui.label(RichText::new("Cliquez sur + pour ajouter une source.").italics().color(theme::MUTED));
                 }
-            } else if let Some(scene) = self.project.scene_mut(scene_id)
-                && let Some(i) = scene.items.iter().position(|it| it.id == id)
-            {
-                match what {
-                    "visible" => scene.items[i].visible = !scene.items[i].visible,
-                    "up" if i > 0 => scene.items.swap(i, i - 1),
-                    "down" if i + 1 < scene.items.len() => scene.items.swap(i, i + 1),
-                    _ => {}
+                let mut toggle = None;
+                for (item, source, visible) in &items {
+                    let Some(src) = self.project.source(*source) else { continue };
+                    let rt = self.runtimes.get(source);
+                    let status = rt.and_then(|r| r.error());
+                    let info = rt.and_then(|r| r.info());
+                    let shared = self.project.scenes.iter().filter(|s| s.items.iter().any(|i| i.source == *source)).count() > 1;
+                    let mut text = format!("{}  {}", src.kind.glyph(), src.name);
+                    if shared {
+                        text.push_str("  🔗");
+                    }
+                    let mut label = RichText::new(text);
+                    if status.is_some() {
+                        label = label.color(theme::WARN);
+                    } else if !visible {
+                        label = label.color(theme::MUTED);
+                    }
+                    ui.horizontal(|ui| {
+                        let w = (ui.available_width() - 34.0).max(0.0);
+                        let sel = self.selected == Some(*item);
+                        let r = ui
+                            .allocate_ui_with_layout(vec2(w, 26.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                                ui.add(egui::Button::selectable(sel, label).min_size(vec2(w, 26.0)))
+                            })
+                            .inner;
+                        let hover = [status.clone(), info.clone(), shared.then(|| "Source partagée avec d'autres scènes".to_string())]
+                            .into_iter()
+                            .flatten()
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        let r = if hover.is_empty() { r } else { r.on_hover_text(hover) };
+                        if r.clicked() {
+                            self.selected = Some(*item);
+                        }
+                        if theme::tool(ui, if *visible { "👁" } else { "⊘" }, if *visible { "Masquer" } else { "Afficher" }) {
+                            toggle = Some(*item);
+                        }
+                    });
+                    if let Some(i) = info {
+                        ui.label(RichText::new(format!("      {i}")).small().color(theme::MUTED));
+                    }
+                }
+                if let Some(id) = toggle
+                    && let Some(scene) = self.project.scene_mut(scene_id)
+                    && let Some(it) = scene.items.iter_mut().find(|i| i.id == id)
+                {
+                    it.visible = !it.visible;
+                    self.touch();
                 }
             }
-            self.touch();
+            Part::Footer => {
+                ui.menu_button(RichText::new("+").size(14.0), |ui| self.add_menu(ui)).response.on_hover_text("Ajouter une source");
+                if self.selected.is_some() && theme::tool(ui, "−", "Retirer la source de la scène") {
+                    self.item_action("remove");
+                }
+                for (icon, tip, delta) in [("⏶", "Monter", -1i32), ("⏷", "Descendre", 1)] {
+                    if theme::tool(ui, icon, tip)
+                        && let Some(sel) = self.selected
+                        && let Some(scene) = self.project.scene_mut(scene_id)
+                        && let Some(i) = scene.items.iter().position(|it| it.id == sel)
+                    {
+                        let j = i as i32 + delta;
+                        if j >= 0 && (j as usize) < scene.items.len() {
+                            scene.items.swap(i, j as usize);
+                            self.touch();
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    fn mixer_row(ui: &mut egui::Ui, name: &str, level: f32, vol: &mut f32, muted: &mut bool, err: Option<String>) -> bool {
+        let mut changed = false;
+        ui.horizontal(|ui| {
+            let mut t = RichText::new(name);
+            if err.is_some() {
+                t = t.color(theme::WARN);
+            }
+            let r = ui
+                .allocate_ui_with_layout(vec2(120.0, 22.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.set_width(120.0);
+                    ui.add(egui::Label::new(t).truncate())
+                })
+                .inner;
+            if let Some(e) = err {
+                r.on_hover_text(e);
+            }
+            if theme::tool(ui, if *muted { "🔇" } else { "🔈" }, "Couper ou rétablir le son") {
+                *muted = !*muted;
+                changed = true;
+            }
+            ui.spacing_mut().slider_width = 130.0;
+            changed |= ui.add(egui::Slider::new(vol, 0.0..=2.0).show_value(false)).changed();
+            ui.add_sized([44.0, 22.0], egui::Label::new(RichText::new(format!("{:.0} %", *vol * 100.0)).color(theme::MUTED)));
+            let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width().max(40.0) - 6.0, 8.0), Sense::hover());
+            let p = ui.painter();
+            p.rect_filled(bar, 3.0, theme::PANEL2);
+            let lvl = if *muted { 0.0 } else { level.min(1.0) };
+            let color = if lvl > 0.9 {
+                theme::DANGER
+            } else if lvl > 0.6 {
+                theme::WARN
+            } else {
+                theme::SUCCESS
+            };
+            p.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * lvl, bar.height())), 3.0, color);
+        });
+        changed
+    }
+
+    fn mixer_dock(&mut self, ui: &mut egui::Ui) {
+        theme::dock(ui, "Mixeur audio", false, |ui, _| {
+            let mut changed = false;
+            for (id, name) in [(MIC, "Micro"), (DESKTOP, "Son du bureau")] {
+                let t = self.mixer.get(id);
+                let level = t.as_ref().map(|t| *t.level.lock()).unwrap_or(0.0);
+                let err = t.as_ref().and_then(|t| t.error.lock().clone());
+                let a = &mut self.project.settings.audio;
+                let (vol, muted) = if id == MIC { (&mut a.mic_volume, &mut a.mic_muted) } else { (&mut a.desktop_volume, &mut a.desktop_muted) };
+                changed |= Self::mixer_row(ui, name, level, vol, muted, err);
+            }
+            for s in self.project.sources.iter_mut().filter(|s| s.kind.has_audio()) {
+                let t = self.mixer.get(s.id);
+                let level = t.as_ref().map(|t| *t.level.lock()).unwrap_or(0.0);
+                let err = t.as_ref().and_then(|t| t.error.lock().clone());
+                changed |= Self::mixer_row(ui, &s.name, level, &mut s.volume, &mut s.muted, err);
+            }
+            if changed {
+                self.touch();
+            }
+        });
+    }
+
+    fn transitions_dock(&mut self, ui: &mut egui::Ui) {
+        theme::dock(ui, "Transitions", false, |ui, _| {
+            let t = &mut self.project.settings.transition;
+            let mut changed = false;
+            ui.label(RichText::new("Type").color(theme::MUTED));
+            egui::ComboBox::from_id_salt("transition").width((ui.available_width() - 8.0).max(0.0)).selected_text(t.kind.label()).show_ui(ui, |ui| {
+                for k in [TransitionKind::Cut, TransitionKind::Fade, TransitionKind::Slide] {
+                    changed |= ui.selectable_value(&mut t.kind, k, k.label()).changed();
+                }
+            });
+            ui.add_space(8.0);
+            ui.label(RichText::new("Durée (ms)").color(theme::MUTED));
+            ui.add_enabled_ui(t.kind != TransitionKind::Cut, |ui| {
+                changed |=
+                    ui.add_sized([(ui.available_width() - 8.0).max(0.0), 28.0], egui::DragValue::new(&mut t.duration_ms).range(50..=3000).speed(10)).changed();
+            });
+            if changed {
+                self.touch();
+            }
+        });
+    }
+
+    fn commands_dock(&mut self, ui: &mut egui::Ui) {
+        theme::dock(ui, "Commandes", false, |ui, _| {
+            ui.spacing_mut().item_spacing.y = 6.0;
+            let streaming = self.live(Kind::Stream);
+            let recording = self.live(Kind::Record);
+            if theme::command(ui, if streaming { "Arrêter le streaming" } else { "Démarrer le streaming" }, streaming.then_some(theme::DANGER)) {
+                self.toggle_output(Kind::Stream);
+            }
+            if theme::command(ui, if recording { "Arrêter l'enregistrement" } else { "Démarrer l'enregistrement" }, recording.then_some(theme::DANGER)) {
+                self.toggle_output(Kind::Record);
+            }
+            if theme::command(ui, "Mode studio", self.project.settings.studio.then_some(theme::ACCENT2)) {
+                self.toggle_studio();
+            }
+            if theme::command(ui, "Dossier des enregistrements", None) {
+                open_path(&self.project.settings.record.folder);
+            }
+            if theme::command(ui, "Paramètres", None) {
+                self.open_settings();
+            }
+            if theme::command(ui, "Quitter", None) {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        });
+    }
+
+    fn properties_dock(&mut self, ui: &mut egui::Ui) {
+        theme::dock(ui, "Propriétés et filtres", false, |ui, _| {
+            if self.selected.is_none() {
+                ui.label(
+                    RichText::new("Sélectionnez une source (dans la liste ou en cliquant dans l'aperçu) pour régler ses propriétés et ses filtres.")
+                        .italics()
+                        .color(theme::MUTED),
+                );
+            }
+            self.properties(ui);
+        });
+    }
+
+    fn status_bar(&mut self, ui: &mut egui::Ui) {
+        let st = self.shared.stats.lock().clone();
+        let fps = self.project.settings.fps;
+        ui.horizontal_centered(|ui| {
+            let (r, _) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
+            let healthy = st.fps >= fps as f32 * 0.95;
+            ui.painter().circle_filled(r.center(), 4.5, if healthy { theme::SUCCESS } else { theme::WARN });
+            let mut text = format!(
+                "{:.1} / {} i/s · rendu {:.1} ms · {} image{} manquée{}",
+                st.fps,
+                fps,
+                st.render_ms,
+                st.lagged,
+                if st.lagged > 1 { "s" } else { "" },
+                if st.lagged > 1 { "s" } else { "" }
+            );
+            if st.dropped > 0 {
+                text.push_str(&format!(" · {} perdue{} à l'encodage", st.dropped, if st.dropped > 1 { "s" } else { "" }));
+            }
+            ui.label(RichText::new(text).size(12.5).color(theme::MUTED));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let outputs = self.shared.outputs.lock();
+                let time = |k: Kind| {
+                    let t = outputs.get(&key(k)).map(|o| o.started.elapsed().as_secs()).unwrap_or(0);
+                    format!("{:02}:{:02}:{:02}", t / 3600, t / 60 % 60, t % 60)
+                };
+                theme::pill(ui, &format!("REC {}", time(Kind::Record)), outputs.contains_key(&key(Kind::Record)));
+                theme::pill(ui, &format!("LIVE {}", time(Kind::Stream)), outputs.contains_key(&key(Kind::Stream)));
+                for out in outputs.values() {
+                    let s = out.stats.lock().clone();
+                    ui.label(RichText::new(format!("{:.0} kb/s · {}", s.bitrate_kbps, output::encoder_label(&out.encoder))).size(12.5).color(theme::MUTED));
+                }
+                drop(outputs);
+                if let Some((msg, err, at)) = &self.notice {
+                    if at.elapsed() < Duration::from_secs(12) {
+                        ui.label(RichText::new(msg).size(12.5).color(if *err { theme::DANGER } else { theme::SUCCESS }));
+                    } else {
+                        self.notice = None;
+                    }
+                }
+            });
+        });
+    }
+
+    /// Aperçu, puis barre d'outils dessous (comme la version Electron).
+    fn preview(&mut self, ui: &mut egui::Ui) {
+        let Some((program, studio)) = self.preview else { return };
+        self.update_banner(ui);
+        let avail = (ui.available_size() - vec2(0.0, 42.0)).max(Vec2::ZERO);
+        if self.preview_hidden {
+            let (r, _) = ui.allocate_exact_size(avail, Sense::hover());
+            ui.painter().rect_filled(r, 0.0, Color32::from_rgb(0x0c, 0x0d, 0x10));
+            ui.painter().text(
+                r.center(),
+                egui::Align2::CENTER_CENTER,
+                "Aperçu masqué (allège la carte graphique)",
+                egui::FontId::proportional(14.0),
+                theme::MUTED,
+            );
+        } else if !self.project.settings.studio {
+            self.canvas_view(ui, program, self.project.current, true, avail);
+        } else {
+            // Mode studio : aperçu (modifiable) à gauche, antenne à droite.
+            let w = ((avail.x - 150.0) / 2.0).max(0.0);
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    ui.label(theme::title("Aperçu"));
+                    let preview = self.project.preview;
+                    self.canvas_view(ui, studio, preview, true, vec2(w, (avail.y - 24.0).max(0.0)));
+                });
+                ui.vertical(|ui| {
+                    ui.add_space(avail.y / 2.0 - 30.0);
+                    let b = egui::Button::new(theme::title("Transition ➡")).fill(theme::ACCENT).min_size(vec2(130.0, 36.0));
+                    if ui.add(b).on_hover_text("Passer la scène de l'aperçu à l'antenne").clicked() {
+                        self.transition();
+                    }
+                });
+                ui.vertical(|ui| {
+                    ui.label(theme::title("À l'antenne").color(theme::DANGER));
+                    let current = self.project.current;
+                    self.canvas_view(ui, program, current, false, vec2(w, (avail.y - 24.0).max(0.0)));
+                });
+            });
         }
-        ui.separator();
-        ui.menu_button("➕ Ajouter", |ui| self.add_menu(ui));
-        ui.separator();
-        egui::ScrollArea::vertical().id_salt("proprietes").show(ui, |ui| self.properties(ui));
+        // Barre sous l'aperçu.
+        let scene_id = self.project.edit_scene();
+        let name = self
+            .selected
+            .and_then(|sel| self.project.scene(scene_id)?.items.iter().find(|i| i.id == sel).map(|i| i.source))
+            .and_then(|s| self.project.source(s))
+            .map(|s| s.name.clone());
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.add_space(8.0);
+            ui.label(RichText::new(name.clone().unwrap_or_else(|| "Aucune source sélectionnée".into())).color(theme::MUTED));
+            ui.add_space(8.0);
+            ui.add_enabled_ui(name.is_some(), |ui| {
+                if ui.button("Ajuster à l'écran").clicked() {
+                    self.item_action("fit");
+                }
+                if ui.button("Taille d'origine").clicked() {
+                    self.item_action("original");
+                }
+                if ui.button("Centrer").clicked() {
+                    self.item_action("center");
+                }
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.add_space(8.0);
+                if ui.button(if self.preview_hidden { "Afficher l'aperçu" } else { "Masquer l'aperçu" }).clicked() {
+                    self.preview_hidden = !self.preview_hidden;
+                }
+            });
+        });
     }
 
     fn add(&mut self, name: &str, kind: SourceKind) {
@@ -773,170 +1145,6 @@ impl App {
         }
     }
 
-    fn preview(&mut self, ui: &mut egui::Ui) {
-        let Some((program, studio)) = self.preview else {
-            return;
-        };
-        if !self.project.settings.studio {
-            let size = ui.available_size();
-            self.canvas_view(ui, program, self.project.current, true, size);
-            return;
-        }
-        // Mode studio : aperçu (modifiable) à gauche, antenne à droite.
-        let avail = ui.available_size();
-        let w = (avail.x - 140.0) / 2.0;
-        ui.horizontal(|ui| {
-            ui.vertical(|ui| {
-                ui.label(RichText::new("Aperçu").strong());
-                let preview = self.project.preview;
-                self.canvas_view(ui, studio, preview, true, vec2(w, avail.y - 24.0));
-            });
-            ui.vertical(|ui| {
-                ui.add_space(avail.y / 2.0 - 30.0);
-                let b = egui::Button::new(RichText::new("Transition ➡").strong()).fill(ACCENT).min_size(vec2(120.0, 36.0));
-                if ui.add(b).on_hover_text("Passer la scène de l'aperçu à l'antenne").clicked() {
-                    self.transition();
-                }
-            });
-            ui.vertical(|ui| {
-                ui.label(RichText::new("À l'antenne").strong().color(LIVE));
-                let current = self.project.current;
-                self.canvas_view(ui, program, current, false, vec2(w, avail.y - 24.0));
-            });
-        });
-    }
-
-    fn mixer_strip(ui: &mut egui::Ui, name: &str, level: f32, vol: &mut f32, muted: &mut bool, err: Option<String>) -> bool {
-        let mut changed = false;
-        ui.group(|ui| {
-            ui.set_width(190.0);
-            ui.vertical(|ui| {
-                let mut title = RichText::new(name).strong();
-                if err.is_some() {
-                    title = title.color(WARN);
-                }
-                let r = ui.label(title);
-                if let Some(e) = err {
-                    r.on_hover_text(e);
-                }
-                let (bar, _) = ui.allocate_exact_size(vec2(180.0, 8.0), Sense::hover());
-                let p = ui.painter();
-                p.rect_filled(bar, 2.0, Color32::from_gray(40));
-                let lvl = if *muted { 0.0 } else { level.min(1.0) };
-                let color = if lvl > 0.9 {
-                    LIVE
-                } else if lvl > 0.6 {
-                    WARN
-                } else {
-                    OK
-                };
-                p.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * lvl, bar.height())), 2.0, color);
-                ui.horizontal(|ui| {
-                    changed |= ui.add(egui::Slider::new(vol, 0.0..=2.0).show_value(false)).changed();
-                    ui.label(format!("{:.0} %", *vol * 100.0));
-                    if ui.selectable_label(*muted, if *muted { "🔇" } else { "🔈" }).on_hover_text("Couper ou rétablir le son").clicked() {
-                        *muted = !*muted;
-                        changed = true;
-                    }
-                });
-            });
-        });
-        changed
-    }
-
-    fn bottom(&mut self, ui: &mut egui::Ui) {
-        self.update_banner(ui);
-        ui.horizontal(|ui| {
-            // Mixeur : micro, son du bureau, puis une piste par source sonore.
-            egui::ScrollArea::horizontal().id_salt("mixeur").max_width(ui.available_width() - 250.0).show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    let mut changed = false;
-                    for (id, name) in [(MIC, "Micro"), (DESKTOP, "Son du bureau")] {
-                        let t = self.mixer.get(id);
-                        let level = t.as_ref().map(|t| *t.level.lock()).unwrap_or(0.0);
-                        let err = t.as_ref().and_then(|t| t.error.lock().clone());
-                        let a = &mut self.project.settings.audio;
-                        let (vol, muted) = if id == MIC { (&mut a.mic_volume, &mut a.mic_muted) } else { (&mut a.desktop_volume, &mut a.desktop_muted) };
-                        changed |= Self::mixer_strip(ui, name, level, vol, muted, err);
-                    }
-                    for s in self.project.sources.iter_mut().filter(|s| s.kind.has_audio()) {
-                        let t = self.mixer.get(s.id);
-                        let level = t.as_ref().map(|t| *t.level.lock()).unwrap_or(0.0);
-                        let err = t.as_ref().and_then(|t| t.error.lock().clone());
-                        changed |= Self::mixer_strip(ui, &s.name, level, &mut s.volume, &mut s.muted, err);
-                    }
-                    if changed {
-                        self.touch();
-                    }
-                });
-            });
-
-            ui.separator();
-            // Commandes.
-            ui.vertical(|ui| {
-                let streaming = self.live(Kind::Stream);
-                let recording = self.live(Kind::Record);
-                let b = egui::Button::new(RichText::new(if streaming { "⏹ Arrêter le streaming" } else { "⏺ Démarrer le streaming" }).strong())
-                    .fill(if streaming { LIVE } else { ACCENT })
-                    .min_size(vec2(220.0, 30.0));
-                if ui.add(b).clicked() {
-                    self.toggle_output(Kind::Stream);
-                }
-                let b = egui::Button::new(if recording { "⏹ Arrêter l'enregistrement" } else { "⏺ Démarrer l'enregistrement" }).min_size(vec2(220.0, 26.0));
-                if ui.add(b).clicked() {
-                    self.toggle_output(Kind::Record);
-                }
-                let studio = self.project.settings.studio;
-                if ui
-                    .add(egui::Button::new(if studio { "🎬 Quitter le mode studio" } else { "🎬 Mode studio" }).selected(studio).min_size(vec2(220.0, 22.0)))
-                    .clicked()
-                {
-                    self.project.settings.studio = !studio;
-                    self.project.preview = self.project.current;
-                    self.touch();
-                }
-                if ui.add(egui::Button::new("⚙ Paramètres").min_size(vec2(220.0, 22.0))).clicked() {
-                    self.draft = self.project.settings.clone();
-                    self.settings_open = true;
-                }
-            });
-        });
-        ui.separator();
-        // Barre d'état.
-        let st = self.shared.stats.lock().clone();
-        let mut parts = vec![format!("{:.1} / {} i/s", st.fps, self.project.settings.fps), format!("rendu {:.1} ms", st.render_ms)];
-        parts.push(format!("{} image(s) manquée(s) au rendu", st.lagged));
-        if st.dropped > 0 {
-            parts.push(format!("{} perdue(s) à l'encodage", st.dropped));
-        }
-        for (k, out) in self.shared.outputs.lock().iter() {
-            let s = out.stats.lock().clone();
-            let t = out.started.elapsed().as_secs();
-            let name = if *k == key(Kind::Stream) { "LIVE" } else { "REC" };
-            parts.push(format!(
-                "{name} {:02}:{:02}:{:02} · {:.0} kb/s · {} ({} écartée(s))",
-                t / 3600,
-                t / 60 % 60,
-                t % 60,
-                s.bitrate_kbps,
-                output::encoder_label(&out.encoder),
-                s.drops
-            ));
-        }
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(parts.join("  ·  ")).small());
-            if let Some((msg, err, at)) = &self.notice {
-                if at.elapsed() < Duration::from_secs(12) {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(RichText::new(msg).color(if *err { LIVE } else { OK }));
-                    });
-                } else {
-                    self.notice = None;
-                }
-            }
-        });
-    }
-
     fn update_banner(&mut self, ui: &mut egui::Ui) {
         use crate::update::State;
         let state = self.update.lock().clone();
@@ -1142,10 +1350,15 @@ impl eframe::App for App {
         self.handle_hotkeys();
         self.update_items();
 
-        egui::Panel::bottom("bas").show(ui, |ui| self.bottom(ui));
-        egui::Panel::left("scenes").default_size(210.0).show(ui, |ui| self.scenes_panel(ui));
-        egui::Panel::right("sources").default_size(300.0).show(ui, |ui| self.sources_panel(ui));
-        egui::CentralPanel::default().show(ui, |ui| self.preview(ui));
+        let bar = |fill| egui::Frame::new().fill(fill);
+        egui::Panel::top("menu").exact_size(36.0).frame(bar(theme::BG).stroke(egui::Stroke::new(1.0, theme::BORDER))).show(ui, |ui| self.top_bar(ui));
+        egui::Panel::bottom("statut").exact_size(28.0).frame(bar(theme::BG).inner_margin(egui::Margin::symmetric(10, 0))).show(ui, |ui| self.status_bar(ui));
+        egui::Panel::bottom("docks")
+            .exact_size(290.0)
+            .frame(bar(theme::BG).inner_margin(egui::Margin { left: 4, right: 4, top: 4, bottom: 2 }))
+            .show(ui, |ui| self.docks(ui));
+        egui::Panel::right("droite").default_size(340.0).min_size(260.0).frame(bar(theme::BG).inner_margin(4)).show(ui, |ui| self.properties_dock(ui));
+        egui::CentralPanel::default().frame(bar(theme::BG).inner_margin(egui::Margin::symmetric(4, 4))).show(ui, |ui| self.preview(ui));
         self.settings_window(&ctx);
 
         if let Some((start, secs)) = self.autotest {
@@ -1175,4 +1388,18 @@ impl eframe::App for App {
         // Laisse FFmpeg finaliser les fichiers en cours.
         std::thread::sleep(Duration::from_millis(500));
     }
+}
+
+/// Version affichée (numéro de la préversion GitHub).
+fn version_label() -> String {
+    match crate::update::build() {
+        0 => "natif (développement)".into(),
+        n => format!("natif 0.1.{n}"),
+    }
+}
+
+/// Ouvre un dossier ou une adresse avec l'application par défaut.
+fn open_path(target: &str) {
+    let cmd = if cfg!(windows) { "explorer" } else { "xdg-open" };
+    let _ = std::process::Command::new(cmd).arg(target).spawn();
 }
