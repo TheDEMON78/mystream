@@ -31,6 +31,10 @@ jobs:
           Get-ChildItem -Recurse ffmpeg -Filter ffmpeg.exe | Select-Object -First 1 | Copy-Item -Destination paquet\
           Copy-Item README.md paquet\LISEZMOI.md
           Compress-Archive -Path paquet\* -DestinationPath MyStream-natif-win64.zip
+      - name: Installateur
+        shell: pwsh
+        run: |
+          & "${env:ProgramFiles(x86)}\NSIS\makensis.exe" /DVERSION=0.1.${{ github.run_number }} installer\mystream.nsi
       - name: Publier la préversion
         uses: softprops/action-gh-release@v2
         with:
@@ -40,5 +44,8 @@ jobs:
           prerelease: true
           body: |
             Version native de MyStream, écrite en Rust (branche « rust »). Préversion à tester.
-            Décompressez le zip et lancez MyStream.exe (FFmpeg est inclus).
-          files: MyStream-natif-win64.zip
+            Installez-le avec MyStream-natif-setup.exe (sans droits administrateur),
+            ou décompressez le zip et lancez MyStream.exe (FFmpeg est inclus).
+          files: |
+            MyStream-natif-setup.exe
+            MyStream-natif-win64.zip

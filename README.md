@@ -11,8 +11,9 @@ navigateur intégré. Objectif : la fluidité et la légèreté d'OBS.
 
 Chaque envoi sur cette branche produit une préversion :
 [Releases](https://github.com/TheDEMON78/mystream/releases) → « MyStream
-natif 0.1.x (préversion) » → `MyStream-natif-win64.zip`. Décompressez-le et
-lancez `MyStream.exe` (FFmpeg est inclus).
+natif 0.1.x (préversion) » → `MyStream-natif-setup.exe` (installation sans
+droits administrateur, raccourcis sur le bureau et dans le menu Démarrer), ou
+`MyStream-natif-win64.zip` à décompresser. FFmpeg est inclus.
 
 ## Pourquoi c'est plus léger
 
@@ -58,8 +59,7 @@ lancez `MyStream.exe` (FFmpeg est inclus).
 1. Sources navigateur (alertes Streamlabs/StreamElements) et chat : il faut
    intégrer un moteur web (WebView2).
 2. Connexion au compte Restream (titre, catégorie, spectateurs, chat).
-3. Installateur Windows (aujourd'hui : zip à décompresser).
-4. Capture sans aucune copie vers le processeur (texture partagée directement
+3. Capture sans aucune copie vers le processeur (texture partagée directement
    avec wgpu) et encodage NVENC depuis la carte graphique.
 
 ## Développement
