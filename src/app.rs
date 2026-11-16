@@ -188,7 +188,7 @@ impl App {
             }
         }
         let sources = &self.project.sources;
-        self.mixer.retain(|id| sources.iter().any(|s| s.id == id && s.kind.has_audio()));
+        self.mixer.retain(|id| id == crate::engine::STINGER || sources.iter().any(|s| s.id == id && s.kind.has_audio()));
         let a = &self.project.settings.audio;
         if let Some(t) = self.mixer.get(MIC) {
             *t.gain.lock() = (a.mic_volume, a.mic_muted);
@@ -239,10 +239,22 @@ impl App {
         // Changement de scène à l'antenne : transition depuis l'image précédente.
         if self.shown != self.project.current {
             let t = &self.project.settings.transition;
-            if t.kind != TransitionKind::Cut && t.duration_ms > 0 {
+            let stinger = t.kind == TransitionKind::Stinger && !t.stinger_file.trim().is_empty();
+            if (t.kind != TransitionKind::Cut && t.kind != TransitionKind::Stinger && t.duration_ms > 0) || stinger {
                 let from = self.shared.items.lock().clone();
+                // Stinger : la vidéo est lue une fois, son son passe dans le mixage du live.
+                let stinger = stinger.then(|| crate::engine::Stinger {
+                    runtime: Runtime::start(
+                        &SourceKind::Media { path: t.stinger_file.clone(), looping: false },
+                        self.project.settings.fps,
+                        Some(self.mixer.track(crate::engine::STINGER)),
+                        &self.chat.handle(),
+                    ),
+                    point: Duration::from_millis(t.stinger_point_ms as u64),
+                    first: None,
+                });
                 *self.shared.transition.lock() =
-                    Some(TransitionRun { from, kind: t.kind, start: Instant::now(), duration: Duration::from_millis(t.duration_ms as u64) });
+                    Some(TransitionRun { from, kind: t.kind, start: Instant::now(), duration: Duration::from_millis(t.duration_ms as u64), stinger });
             }
             self.shown = self.project.current;
         }
@@ -790,11 +802,29 @@ impl App {
             let mut changed = false;
             ui.label(RichText::new("Type").color(theme::MUTED));
             egui::ComboBox::from_id_salt("transition").width((ui.available_width() - 8.0).max(0.0)).selected_text(t.kind.label()).show_ui(ui, |ui| {
-                for k in [TransitionKind::Cut, TransitionKind::Fade, TransitionKind::Slide] {
+                for k in [TransitionKind::Cut, TransitionKind::Fade, TransitionKind::Slide, TransitionKind::Stinger] {
                     changed |= ui.selectable_value(&mut t.kind, k, k.label()).changed();
                 }
             });
             ui.add_space(8.0);
+            if t.kind == TransitionKind::Stinger {
+                let name = std::path::Path::new(&t.stinger_file).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Aucune vidéo".into());
+                ui.label(RichText::new(name).small().color(theme::MUTED));
+                if ui.add(egui::Button::new("Choisir la vidéo…").min_size(vec2((ui.available_width() - 8.0).max(0.0), 26.0))).clicked()
+                    && let Some(p) = rfd::FileDialog::new().add_filter("Vidéos", &["webm", "mov", "mp4", "mkv", "avi"]).pick_file()
+                {
+                    t.stinger_file = p.to_string_lossy().into_owned();
+                    changed = true;
+                }
+                ui.label(RichText::new("Point de coupe (ms)").color(theme::MUTED)).on_hover_text("Moment de la vidéo où la scène change (quand l'animation couvre l'écran)");
+                changed |= ui
+                    .add_sized([(ui.available_width() - 8.0).max(0.0), 28.0], egui::DragValue::new(&mut t.stinger_point_ms).range(0..=10000).speed(10))
+                    .changed();
+                if changed {
+                    self.touch();
+                }
+                return;
+            }
             ui.label(RichText::new("Durée (ms)").color(theme::MUTED));
             ui.add_enabled_ui(t.kind != TransitionKind::Cut, |ui| {
                 changed |=
@@ -1650,6 +1680,10 @@ impl eframe::App for App {
             let t = start.elapsed();
             if t > Duration::from_secs(2) && !self.live(Kind::Record) && t < Duration::from_secs(3) {
                 self.toggle_output(Kind::Record);
+            }
+            // Changement de scène à mi-parcours (pour tester les transitions).
+            if t > Duration::from_secs(2 + secs / 2) && self.project.scenes.len() > 1 && self.shown == self.project.scenes[0].id {
+                self.project.current = self.project.scenes[1].id;
             }
             if t > Duration::from_secs(2 + secs) {
                 self.autotest = None;

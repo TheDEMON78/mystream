@@ -65,6 +65,8 @@ pub struct Status {
     counter: Mutex<(u32, Option<Instant>)>,
     /// Processus FFmpeg de la source (média, caméra), arrêtés avec elle.
     children: Mutex<Vec<Child>>,
+    /// La vidéo est arrivée à la fin (média lu une seule fois).
+    pub ended: AtomicBool,
 }
 
 impl Status {
@@ -108,6 +110,7 @@ impl Runtime {
                 let data = rgba.iter().copied().cycle().take((w * h * 4) as usize).collect();
                 slot.set(Frame::new(w, h, data));
             }
+            SourceKind::Image { path } if path.to_lowercase().ends_with(".gif") => start_gif(path.clone(), slot.clone(), status.clone()),
             SourceKind::Image { path } => match image::open(path) {
                 Ok(img) => {
                     let img = img.to_rgba8();
@@ -154,6 +157,46 @@ impl Drop for Runtime {
             let _ = c.wait();
         }
     }
+}
+
+/* GIF animé --------------------------------------------------------------- */
+
+fn start_gif(path: String, slot: Slot, status: Arc<Status>) {
+    use image::AnimationDecoder;
+    std::thread::spawn(move || {
+        let frames = std::fs::File::open(&path)
+            .map_err(|e| e.to_string())
+            .and_then(|f| image::codecs::gif::GifDecoder::new(std::io::BufReader::new(f)).map_err(|e| e.to_string()))
+            .and_then(|d| d.into_frames().collect_frames().map_err(|e| e.to_string()));
+        let frames = match frames {
+            Ok(f) if !f.is_empty() => f,
+            Ok(_) => return status.fail(format!("GIF vide : {path}")),
+            Err(e) => return status.fail(format!("GIF illisible ({path}) : {e}")),
+        };
+        // Images décodées une fois, puis rejouées en boucle à leur propre rythme.
+        let decoded: Vec<(Arc<Frame>, Duration)> = frames
+            .into_iter()
+            .map(|f| {
+                let (n, d) = f.delay().numer_denom_ms();
+                let ms = if d == 0 { 100 } else { (n / d).max(20) };
+                let img = f.into_buffer();
+                (Arc::new(Frame::new(img.width(), img.height(), img.into_raw())), Duration::from_millis(ms as u64))
+            })
+            .collect();
+        loop {
+            for (frame, delay) in &decoded {
+                if status.stopped() {
+                    return;
+                }
+                // Nouveau numéro à chaque passage : le compositeur renvoie l'image à la carte graphique.
+                slot.set(Frame::new(frame.width, frame.height, frame.data.clone()));
+                std::thread::sleep(*delay);
+            }
+            if decoded.len() == 1 {
+                return;
+            }
+        }
+    });
 }
 
 /* Texte ------------------------------------------------------------------ */
@@ -225,7 +268,7 @@ fn ffmpeg() -> Command {
 }
 
 /// Taille de la vidéo et présence de son d'un fichier, lues dans la sortie de « ffmpeg -i ».
-fn probe(path: &str) -> (Option<(u32, u32)>, bool) {
+fn probe(path: &str) -> (Option<(u32, u32)>, bool, String, f64) {
     let out = ffmpeg().args(["-i", path]).stdout(Stdio::null()).stderr(Stdio::piped()).output();
     let text = out.map(|o| String::from_utf8_lossy(&o.stderr).into_owned()).unwrap_or_default();
     let size = text
@@ -237,25 +280,56 @@ fn probe(path: &str) -> (Option<(u32, u32)>, bool) {
             Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?))
         })
         .filter(|(w, h)| *w > 0 && *h > 0);
-    (size, text.contains("Audio:"))
+    // Codec vidéo : les WebM avec transparence doivent être lus par libvpx (le décodeur
+    // intégré de FFmpeg ignore la couche alpha).
+    let codec = text.lines().find(|l| l.contains("Video:")).and_then(|l| l.split("Video:").nth(1)).map(|c| c.trim().split([' ', ',']).next().unwrap_or("").to_string()).unwrap_or_default();
+    let alpha = text.contains("alpha_mode") || text.contains("ALPHA_MODE");
+    // Fréquence d'images (« 30 fps », « 29.97 fps », sinon « 30 tbr »).
+    let rate = |unit: &str| {
+        text.lines().filter(|l| l.contains("Video:")).find_map(|l| {
+            let words: Vec<&str> = l.split([' ', ',']).filter(|w| !w.is_empty()).collect();
+            words.windows(2).find(|w| w[1] == unit).and_then(|w| w[0].parse::<f64>().ok())
+        })
+    };
+    let fps = rate("fps").or_else(|| rate("tbr")).filter(|f| *f > 1.0 && *f <= 240.0).unwrap_or(30.0);
+    (size, text.contains("Audio:"), if alpha { codec } else { String::new() }, fps)
 }
 
 /// Lit des images RGBA de taille fixe sur la sortie d'un processus FFmpeg.
-fn pump_video(mut child: Child, w: u32, h: u32, slot: Slot, status: Arc<Status>) {
+/// Avec `pace`, les images sont cadencées à cette fréquence (l'option -re de
+/// FFmpeg envoie les premières images en rafale).
+fn pump_video(mut child: Child, w: u32, h: u32, slot: Slot, status: Arc<Status>, pace: Option<f64>) {
     let mut out = child.stdout.take().unwrap();
     status.adopt(child);
     std::thread::spawn(move || {
         let mut buf = vec![0u8; (w * h * 4) as usize];
+        let start = Instant::now();
+        let mut n = 0u64;
         while !status.stopped() && out.read_exact(&mut buf).is_ok() {
+            if let Some(fps) = pace {
+                let due = start + Duration::from_secs_f64(n as f64 / fps);
+                let now = Instant::now();
+                if due > now {
+                    std::thread::sleep(due - now);
+                }
+                n += 1;
+            }
             slot.set(Frame::new(w, h, buf.clone()));
             status.frame();
         }
+        status.ended.store(true, Ordering::Relaxed);
     });
 }
 
 fn start_media(path: String, looping: bool, slot: Slot, status: Arc<Status>, track: Option<Arc<Track>>) {
     std::thread::spawn(move || {
-        let (size, has_audio) = probe(&path);
+        let (size, has_audio, alpha_codec, fps) = probe(&path);
+        let rate = format!("{fps}");
+        let decoder: Vec<&str> = match alpha_codec.as_str() {
+            "vp9" => vec!["-c:v", "libvpx-vp9"],
+            "vp8" => vec!["-c:v", "libvpx"],
+            _ => vec![],
+        };
         if size.is_none() && !has_audio {
             return status.fail(format!("Fichier illisible : {path}"));
         }
@@ -265,13 +339,14 @@ fn start_media(path: String, looping: bool, slot: Slot, status: Arc<Status>, tra
             let child = ffmpeg()
                 .args(["-loglevel", "error", "-re"])
                 .args(&lp)
-                .args(["-i", &path, "-an", "-pix_fmt", "rgba", "-f", "rawvideo", "-"])
+                .args(&decoder)
+                .args(["-i", &path, "-an", "-fps_mode", "cfr", "-r", &rate, "-pix_fmt", "rgba", "-f", "rawvideo", "-"])
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::null())
                 .spawn();
             match child {
-                Ok(c) => pump_video(c, w, h, slot, status.clone()),
+                Ok(c) => pump_video(c, w, h, slot, status.clone(), Some(fps)),
                 Err(e) => return status.fail(format!("FFmpeg introuvable : {e}")),
             }
         }
@@ -345,7 +420,7 @@ fn start_camera(device: String, w: u32, h: u32, fps: u32, slot: Slot, status: Ar
         match child {
             Ok(mut c) => {
                 let mut err = c.stderr.take().unwrap();
-                pump_video(c, w, h, slot, status.clone());
+                pump_video(c, w, h, slot, status.clone(), None);
                 let mut text = String::new();
                 let _ = err.read_to_string(&mut text);
                 if !status.stopped()

@@ -330,6 +330,8 @@ pub enum TransitionKind {
     Cut,
     Fade,
     Slide,
+    /// Vidéo jouée par-dessus ; la scène change au point de coupe.
+    Stinger,
 }
 
 impl TransitionKind {
@@ -338,6 +340,7 @@ impl TransitionKind {
             TransitionKind::Cut => "Coupure",
             TransitionKind::Fade => "Fondu",
             TransitionKind::Slide => "Glissement",
+            TransitionKind::Stinger => "Stinger (vidéo)",
         }
     }
 }
@@ -347,11 +350,15 @@ impl TransitionKind {
 pub struct Transition {
     pub kind: TransitionKind,
     pub duration_ms: u32,
+    /// Stinger : vidéo (de préférence avec transparence : WebM VP9, MOV ProRes 4444).
+    pub stinger_file: String,
+    /// Moment où la scène change, depuis le début de la vidéo.
+    pub stinger_point_ms: u32,
 }
 
 impl Default for Transition {
     fn default() -> Self {
-        Self { kind: TransitionKind::Fade, duration_ms: 300 }
+        Self { kind: TransitionKind::Fade, duration_ms: 300, stinger_file: String::new(), stinger_point_ms: 500 }
     }
 }
 

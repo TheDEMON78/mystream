@@ -45,6 +45,47 @@ pub struct TransitionRun {
     pub kind: TransitionKind,
     pub start: Instant,
     pub duration: Duration,
+    pub stinger: Option<Stinger>,
+}
+
+/// Vidéo du stinger en cours de lecture.
+pub struct Stinger {
+    pub runtime: crate::capture::Runtime,
+    pub point: Duration,
+    /// Arrivée de la première image (la lecture commence vraiment là).
+    pub first: Option<Instant>,
+}
+
+/// Identifiant réservé à l'image du stinger dans le compositeur.
+pub const STINGER: u64 = u64::MAX - 8;
+
+/// Stinger : scène de départ puis d'arrivée (au point de coupe), vidéo par-dessus.
+fn blend_stinger(to: &[DrawItem], run: &mut TransitionRun, width: f32, height: f32, frames: &mut HashMap<u64, Arc<Frame>>) -> Option<Vec<DrawItem>> {
+    let s = run.stinger.as_mut()?;
+    let frame = s.runtime.slot.get();
+    if s.first.is_none() {
+        if frame.is_some() {
+            s.first = Some(Instant::now());
+        } else if run.start.elapsed() < Duration::from_secs(1) {
+            return Some(run.from.clone()); // la vidéo démarre : on garde l'ancienne scène
+        } else {
+            log::warn!("Stinger : aucune image reçue en 1 s, simple coupure");
+            return None; // vidéo illisible : simple coupure
+        }
+    }
+    let t = s.first.unwrap().elapsed();
+    let ended = s.runtime.status.ended.load(Ordering::Relaxed);
+    if (ended && t >= s.point) || t > Duration::from_secs(30) {
+        log::debug!("Stinger terminé après {} ms", t.as_millis());
+        return None;
+    }
+    let mut out = Vec::new();
+    if let Some(f) = frame {
+        frames.insert(STINGER, f);
+        out.push(DrawItem { source: STINGER, x: 0.0, y: 0.0, w: width, h: height, filters: Default::default(), alpha: 1.0 });
+    }
+    out.extend_from_slice(if t < s.point { &run.from } else { to });
+    Some(out)
 }
 
 /// Liste à dessiner pendant une transition (premier plan en tête de liste).
@@ -62,7 +103,7 @@ fn blend(to: &[DrawItem], run: &TransitionRun, width: f32) -> Option<Vec<DrawIte
             from.iter_mut().for_each(|i| i.x -= e * width);
             out.iter_mut().for_each(|i| i.x += (1.0 - e) * width);
         }
-        TransitionKind::Cut => {}
+        TransitionKind::Cut | TransitionKind::Stinger => {}
     }
     out.extend(from);
     Some(out)
@@ -122,7 +163,7 @@ impl Engine {
                         next += period * missed as u32;
                     }
 
-                    let frames: HashMap<u64, Arc<Frame>> = shared.slots.lock().iter().filter_map(|(id, s)| s.get().map(|f| (*id, f))).collect();
+                    let mut frames: HashMap<u64, Arc<Frame>> = shared.slots.lock().iter().filter_map(|(id, s)| s.get().map(|f| (*id, f))).collect();
                     {
                         let mut sizes = shared.sizes.lock();
                         for (id, f) in &frames {
@@ -133,7 +174,8 @@ impl Engine {
                     let nv12 = {
                         let items = shared.items.lock();
                         let mut tr = shared.transition.lock();
-                        let blended = tr.as_ref().and_then(|run| blend(&items, run, comp.width as f32));
+                        let (cw, ch) = (comp.width as f32, comp.height as f32);
+                        let blended = tr.as_mut().and_then(|run| if run.kind == TransitionKind::Stinger { blend_stinger(&items, run, cw, ch, &mut frames) } else { blend(&items, run, cw) });
                         if blended.is_none() {
                             *tr = None;
                         }
