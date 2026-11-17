@@ -829,7 +829,7 @@ impl App {
                                 menu = Some((*item, a));
                             }
                         });
-                        if theme::tool(ui, if *visible { "👁" } else { "⊘" }, if *visible { "Masquer" } else { "Afficher" }) {
+                        if theme::eye_tool(ui, *visible, if *visible { "Masquer" } else { "Afficher" }) {
                             toggle = Some(*item);
                         }
                         if theme::tool(
@@ -1313,7 +1313,7 @@ impl App {
             }
         });
         if cfg!(windows) {
-            ui.menu_button("🗔 Capture de fenêtre", |ui| {
+            ui.menu_button("🗗 Capture de fenêtre", |ui| {
                 egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
                     for title in capture::windows() {
                         if ui.button(&title).clicked() {

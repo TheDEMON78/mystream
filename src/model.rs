@@ -471,7 +471,7 @@ impl SourceKind {
     pub fn glyph(&self) -> &'static str {
         match self {
             SourceKind::Display { .. } => "🖥",
-            SourceKind::Window { .. } => "🗔",
+            SourceKind::Window { .. } => "🗗",
             SourceKind::Game { .. } => "🎮",
             SourceKind::Image { .. } => "🖼",
             SourceKind::Color { .. } => "■",

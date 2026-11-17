@@ -164,6 +164,19 @@ pub fn tool(ui: &mut egui::Ui, icon: &str, tip: &str) -> bool {
     ui.add(egui::Button::new(RichText::new(icon).size(14.0)).frame(false).min_size(vec2(28.0, 24.0))).on_hover_text(tip).clicked()
 }
 
+/// Œil « afficher / masquer » : barré et grisé quand la source est masquée
+/// (dessiné, pour ne dépendre d'aucun symbole de police).
+pub fn eye_tool(ui: &mut egui::Ui, visible: bool, tip: &str) -> bool {
+    let text = RichText::new("👁").size(14.0).color(if visible { TEXT } else { MUTED });
+    let r = ui.add(egui::Button::new(text).frame(false).min_size(vec2(28.0, 24.0))).on_hover_text(tip);
+    if !visible {
+        let c = r.rect.center();
+        let d = vec2(7.0, 7.0);
+        ui.painter().line_segment([c - d, c + d], Stroke::new(1.6, DANGER));
+    }
+    r.clicked()
+}
+
 /// Bouton pleine largeur du dock « Commandes ».
 pub fn command(ui: &mut egui::Ui, text: &str, fill: Option<Color32>) -> bool {
     let mut b = egui::Button::new(RichText::new(text).color(TEXT)).min_size(vec2(ui.available_width(), 30.0));

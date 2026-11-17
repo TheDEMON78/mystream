@@ -607,7 +607,7 @@ impl App {
                     if ui.add(b).clicked() {
                         self.capturing_hotkey = Some(action.to_string());
                     }
-                    if !current.is_empty() && ui.small_button("✕").on_hover_text("Retirer le raccourci").clicked() {
+                    if !current.is_empty() && ui.small_button("×").on_hover_text("Retirer le raccourci").clicked() {
                         self.draft.hotkeys.insert(action.to_string(), String::new());
                     }
                 });
