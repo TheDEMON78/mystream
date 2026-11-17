@@ -2,6 +2,8 @@
 
 mod control;
 mod edit;
+mod extras;
+mod layout;
 mod live;
 mod session;
 mod settings;
@@ -55,6 +57,16 @@ pub struct App {
     scene_transition: Option<u64>,
     /// Scène quittée par la dernière transition.
     leaving: u64,
+    /// Nom saisi pour enregistrer la disposition des docks.
+    saving_layout: Option<String>,
+    /// Position non calée de l'élément en cours de déplacement.
+    drag_raw: Option<(f32, f32)>,
+    /// Confirmation d'arrêt du live demandée.
+    confirm_stop: bool,
+    /// Assistant de configuration ouvert.
+    wizard: Option<extras::Wizard>,
+    /// Icône dans la zone de notification (fenêtre réduite).
+    tray: Option<extras::Tray>,
     /// Dernière fois que chaque source était affichée (arrêt des sources cachées).
     last_needed: HashMap<u64, Instant>,
     cameras: Option<Vec<String>>,
@@ -99,6 +111,11 @@ impl App {
             shown: project.current,
             scene_transition: None,
             leaving: 0,
+            saving_layout: None,
+            drag_raw: None,
+            confirm_stop: false,
+            wizard: None,
+            tray: None,
             last_needed: HashMap::new(),
             project,
             runtimes: HashMap::new(),
@@ -283,7 +300,9 @@ impl App {
         }
         if let Some(t) = self.mixer.get(DESKTOP) {
             *t.gain.lock() = (a.desktop_volume, a.desktop_muted);
+            t.off_air.store(!a.desktop_audio, std::sync::atomic::Ordering::Relaxed);
         }
+        self.mixer.set_mic(&a.mic_device);
         let mut slots = self.shared.slots.lock();
         slots.retain(|id, _| self.runtimes.contains_key(id));
         for (id, rt) in &self.runtimes {
@@ -577,12 +596,38 @@ impl App {
                     ui.close();
                     self.preview_hidden = !self.preview_hidden;
                 }
+                let bar = self.project.settings.ui.live_bar;
+                if ui.button(format!("{}  Barre « En direct » pendant le live", if bar { "✔" } else { "   " })).clicked() {
+                    self.project.settings.ui.live_bar = !bar;
+                    self.touch();
+                    ui.close();
+                }
+                ui.separator();
+                ui.menu_button("Docks", |ui| self.docks_menu(ui));
             });
             ui.menu_button("Aide", |ui| {
                 ui.label(RichText::new(format!("MyStream natif — {}", version_label())).color(theme::MUTED));
+                if ui.button("Assistant de configuration…").clicked() {
+                    ui.close();
+                    self.open_wizard();
+                }
                 if ui.button("Rechercher des mises à jour").clicked() {
                     ui.close();
                     self.check_updates(true);
+                }
+                if ui.button("Ouvrir le dossier des journaux").clicked() {
+                    ui.close();
+                    open_path(&extras::logs_dir().to_string_lossy());
+                }
+                if ui.button("Copier le diagnostic de performance").clicked() {
+                    ui.close();
+                    let text = self.perf_diagnostic();
+                    ui.ctx().copy_text(text);
+                    self.notify("Diagnostic copié : collez-le dans votre message.", false);
+                }
+                if ui.button("Notes de version").clicked() {
+                    ui.close();
+                    open_path("https://github.com/TheDEMON78/mystream/releases");
                 }
                 if ui.button("Plugin Stream Deck MyStream…").clicked() {
                     ui.close();
@@ -594,25 +639,6 @@ impl App {
                 }
             });
         }
-    }
-
-    fn docks(&mut self, ui: &mut egui::Ui) {
-        let h = ui.available_height().max(0.0);
-        let gap = 6.0;
-        let fixed = [230.0, 295.0, 205.0, 228.0];
-        let mixer_w = (ui.available_width() - fixed.iter().sum::<f32>() - gap * 4.0).max(220.0);
-        ui.horizontal_top(|ui| {
-            ui.spacing_mut().item_spacing.x = gap;
-            for (w, which) in [(fixed[0], 0), (fixed[1], 1), (mixer_w, 2), (fixed[2], 3), (fixed[3], 4)] {
-                ui.allocate_ui_with_layout(vec2(w, h), egui::Layout::top_down(egui::Align::Min), |ui| match which {
-                    0 => self.scenes_dock(ui),
-                    1 => self.sources_dock(ui),
-                    2 => self.mixer_dock(ui),
-                    3 => self.transitions_dock(ui),
-                    _ => self.commands_dock(ui),
-                });
-            }
-        });
     }
 
     fn scenes_dock(&mut self, ui: &mut egui::Ui) {
@@ -950,7 +976,13 @@ impl App {
         theme::dock(ui, "Mixeur audio", false, |ui, _| {
             let mut changed = false;
             let mut open = None;
-            for (id, name) in [(MIC, "Micro"), (DESKTOP, "Son du bureau")] {
+            let a = &self.project.settings.audio;
+            let fixed: Vec<(u64, &str)> = [(MIC, "Micro", a.mic_device != "off"), (DESKTOP, "Son du bureau", a.desktop_audio)]
+                .into_iter()
+                .filter(|(_, _, on)| *on)
+                .map(|(id, n, _)| (id, n))
+                .collect();
+            for (id, name) in fixed {
                 let t = self.mixer.get(id);
                 let level = t.as_ref().map(|t| *t.level.lock()).unwrap_or(0.0);
                 let err = t.as_ref().and_then(|t| t.error.lock().clone());
@@ -1041,7 +1073,11 @@ impl App {
                 "Démarrer le streaming"
             };
             if theme::command(ui, label, streaming.then_some(theme::DANGER)) {
-                self.toggle_output(Kind::Stream);
+                if streaming && self.project.settings.confirm_stop_stream {
+                    self.confirm_stop = true;
+                } else {
+                    self.toggle_output(Kind::Stream);
+                }
             }
             if theme::command(ui, if recording { "Arrêter l'enregistrement" } else { "Démarrer l'enregistrement" }, recording.then_some(theme::DANGER)) {
                 self.toggle_output(Kind::Record);
@@ -1062,15 +1098,6 @@ impl App {
     }
 
     /// Colonne de droite : chat, puis titre et catégorie (comme la version Electron).
-    fn right_column(&mut self, ui: &mut egui::Ui) {
-        let h = ui.available_height();
-        let w = ui.available_width();
-        let chat_h = (h * 0.5).max(120.0);
-        ui.allocate_ui_with_layout(vec2(w, chat_h), egui::Layout::top_down(egui::Align::Min), |ui| self.chat_dock(ui));
-        ui.add_space(4.0);
-        ui.allocate_ui_with_layout(vec2(w, (h - chat_h - 4.0).max(60.0)), egui::Layout::top_down(egui::Align::Min), |ui| self.live_dock(ui));
-    }
-
     /// Filtres audio d'une piste (micro ou source sonore).
     fn audio_filters_window(&mut self, ctx: &egui::Context) {
         let Some(id) = self.audio_filters_open else { return };
@@ -1192,14 +1219,17 @@ impl App {
     fn preview(&mut self, ui: &mut egui::Ui) {
         let Some((program, studio)) = self.preview else { return };
         self.update_banner(ui);
+        self.live_bar(ui);
         let avail = (ui.available_size() - vec2(0.0, 42.0)).max(Vec2::ZERO);
-        if self.preview_hidden {
+        let paused = self.shared.preview_paused.load(std::sync::atomic::Ordering::Relaxed);
+        if self.preview_hidden || paused {
+            let text = if paused { "Aperçu en pause pendant le live : MyStream n'est pas au premier plan" } else { "Aperçu masqué (allège la carte graphique)" };
             let (r, _) = ui.allocate_exact_size(avail, Sense::hover());
             ui.painter().rect_filled(r, 0.0, Color32::from_rgb(0x0c, 0x0d, 0x10));
             ui.painter().text(
                 r.center(),
                 egui::Align2::CENTER_CENTER,
-                "Aperçu masqué (allège la carte graphique)",
+                text,
                 egui::FontId::proportional(14.0),
                 theme::MUTED,
             );
@@ -1695,13 +1725,58 @@ impl App {
         let drag = resp.drag_delta() / k;
         let zoom = if resp.hovered() { ui.input(|i| i.smooth_scroll_delta.y) } else { 0.0 };
         let mut moved = false;
+        if !resp.dragged() {
+            self.drag_raw = None;
+        }
+        // Calage magnétique : bords et centre de l'écran, bords et centres des autres sources.
+        let others: Vec<Rect> = self
+            .project
+            .scene(scene_id)
+            .map(|s| s.items.iter().filter(|i| i.visible && Some(i.id) != self.selected).filter_map(&item_rect).collect())
+            .unwrap_or_default();
+        let free = ui.input(|i| i.modifiers.alt);
+        let mut guides: Vec<(bool, f32)> = Vec::new();
         if let Some(sel) = self.selected
             && let Some(scene) = self.project.scene_mut(scene_id)
             && let Some(item) = scene.items.iter_mut().find(|i| i.id == sel)
         {
             if resp.dragged() && drag != Vec2::ZERO && !item.locked {
-                item.x += drag.x;
-                item.y += drag.y;
+                // Position « libre » suivie à part : le calage ne bloque pas le déplacement.
+                let raw = self.drag_raw.get_or_insert((item.x, item.y));
+                raw.0 += drag.x;
+                raw.1 += drag.y;
+                let (rx, ry) = *raw;
+                (item.x, item.y) = (rx, ry);
+                if !free && let Some(r) = item_rect(item) {
+                    let tol = 10.0 / k; // 10 pixels à l'écran
+                    let snap = |pos: f32, len: f32, targets: &[f32]| -> Option<(f32, f32)> {
+                        // Bord de début, centre, bord de fin de l'élément contre chaque cible.
+                        let mut best: Option<(f32, f32, f32)> = None;
+                        for t in targets {
+                            for off in [0.0, len / 2.0, len] {
+                                let d = (pos + off - t).abs();
+                                if d <= tol && best.is_none_or(|b| d < b.2) {
+                                    best = Some((t - off, *t, d));
+                                }
+                            }
+                        }
+                        best.map(|b| (b.0, b.1))
+                    };
+                    let mut xs = vec![0.0, cw / 2.0, cw];
+                    let mut ys = vec![0.0, ch / 2.0, ch];
+                    for o in &others {
+                        xs.extend([o.min.x, o.center().x, o.max.x]);
+                        ys.extend([o.min.y, o.center().y, o.max.y]);
+                    }
+                    if let Some((x, line)) = snap(rx, r.width(), &xs) {
+                        item.x = x;
+                        guides.push((true, line));
+                    }
+                    if let Some((y, line)) = snap(ry, r.height(), &ys) {
+                        item.y = y;
+                        guides.push((false, line));
+                    }
+                }
                 moved = true;
             }
             // Molette : agrandir ou réduire autour du centre de l'élément.
@@ -1720,6 +1795,17 @@ impl App {
             if let Some(r) = item_rect(item) {
                 let screen = Rect::from_min_max(rect.min + r.min.to_vec2() * k, rect.min + r.max.to_vec2() * k);
                 painter.rect_stroke(screen, 0.0, Stroke::new(2.0, LIVE), StrokeKind::Outside);
+            }
+            // Lignes de repère du calage.
+            let guide = Stroke::new(1.0, Color32::from_rgb(0xff, 0x4d, 0xd2));
+            for (vertical, v) in &guides {
+                if *vertical {
+                    let x = rect.min.x + v * k;
+                    painter.vline(x, rect.y_range(), guide);
+                } else {
+                    let y = rect.min.y + v * k;
+                    painter.hline(rect.x_range(), y, guide);
+                }
             }
         }
         if moved {
@@ -1813,7 +1899,12 @@ impl App {
 impl eframe::App for App {
     /// Appelé aussi quand la fenêtre est réduite (en jeu) : Stream Deck,
     /// raccourcis globaux et sorties doivent continuer de fonctionner.
-    fn logic(&mut self, _ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Pendant un live, MyStream au second plan : l'aperçu n'est plus redessiné.
+        let (focused, minimized) = ctx.input(|i| (i.viewport().focused.unwrap_or(true), i.viewport().minimized.unwrap_or(false)));
+        let paused = minimized || (self.project.settings.auto_hide_preview && self.live(Kind::Stream) && !focused);
+        self.shared.preview_paused.store(paused, std::sync::atomic::Ordering::Relaxed);
+        self.tray_tick(ctx, minimized);
         self.sync_runtimes();
         self.poll_outputs();
         self.check_outputs();
@@ -1836,17 +1927,24 @@ impl eframe::App for App {
         let bar = |fill| egui::Frame::new().fill(fill);
         egui::Panel::top("menu").exact_size(36.0).frame(bar(theme::BG).stroke(egui::Stroke::new(1.0, theme::BORDER))).show(ui, |ui| self.top_bar(ui));
         egui::Panel::bottom("statut").exact_size(28.0).frame(bar(theme::BG).inner_margin(egui::Margin::symmetric(10, 0))).show(ui, |ui| self.status_bar(ui));
-        egui::Panel::bottom("docks")
-            .exact_size(290.0)
-            .frame(bar(theme::BG).inner_margin(egui::Margin { left: 4, right: 4, top: 4, bottom: 2 }))
-            .show(ui, |ui| self.docks(ui));
-        egui::Panel::right("droite").default_size(340.0).min_size(260.0).frame(bar(theme::BG).inner_margin(4)).show(ui, |ui| self.right_column(ui));
+        if !self.zone(false).is_empty() {
+            egui::Panel::bottom("docks")
+                .exact_size(290.0)
+                .frame(bar(theme::BG).inner_margin(egui::Margin { left: 4, right: 4, top: 4, bottom: 2 }))
+                .show(ui, |ui| self.docks(ui));
+        }
+        if !self.zone(true).is_empty() {
+            egui::Panel::right("droite").default_size(340.0).min_size(260.0).frame(bar(theme::BG).inner_margin(4)).show(ui, |ui| self.right_column(ui));
+        }
         egui::CentralPanel::default().frame(bar(theme::BG).inner_margin(egui::Margin::symmetric(4, 4))).show(ui, |ui| self.preview(ui));
         self.settings_window(&ctx);
         self.properties_window(&ctx);
         self.audio_filters_window(&ctx);
         self.transform_window(&ctx);
         self.scene_transition_window(&ctx);
+        self.save_layout_window(&ctx);
+        self.confirm_stop_window(&ctx);
+        self.wizard_window(&ctx);
         // Raccourcis de l'interface (hors champs de saisie).
         if !ctx.egui_wants_keyboard_input() {
             let (undo, redo, transform) = ctx.input(|i| {

@@ -186,7 +186,7 @@ pub fn start_input(device: String, denoise: bool, track: Arc<Track>, stop: Arc<s
             track.fail(format!("« {device} » introuvable : est-il branché ?"));
             return;
         }
-        let stream = open_device_with(track.clone(), "Entrée audio", dev, denoise);
+        let stream = open_device_with(track.clone(), if device.is_empty() { "Micro" } else { "Entrée audio" }, dev, denoise);
         while stream.is_some() && !stop.load(std::sync::atomic::Ordering::Relaxed) {
             std::thread::sleep(Duration::from_millis(200));
         }
@@ -262,6 +262,9 @@ pub struct Mixer {
     /// Son de l'écoute au casque, en attente d'être joué.
     monitor: Arc<Mutex<VecDeque<f32>>>,
     _streams: Vec<cpal::Stream>,
+    /// Arrêt du fil du micro, et micro choisi.
+    mic_stop: Mutex<Option<Arc<std::sync::atomic::AtomicBool>>>,
+    mic_device: Mutex<Option<String>>,
 }
 
 /// Sortie de l'écoute au casque (périphérique de sortie par défaut).
@@ -310,7 +313,6 @@ impl Mixer {
         *mic.gain.lock() = (1.0, false);
         *desktop.gain.lock() = (1.0, false);
         let mut streams = Vec::new();
-        streams.extend(open_device(mic.clone(), "Micro", host.default_input_device()));
         // Son du bureau : sous Windows, tout ce que le PC joue sauf MyStream (pas d'écho de
         // l'écoute au casque) ; ailleurs, la sortie ouverte en boucle.
         if !crate::capture::system_audio(desktop.clone()) {
@@ -320,9 +322,30 @@ impl Mixer {
         tracks.lock().insert(DESKTOP, desktop);
         let monitor: Arc<Mutex<VecDeque<f32>>> = Arc::default();
         streams.extend(open_monitor(monitor.clone()));
-        let mixer = Self { tracks, sinks: Arc::default(), monitor, _streams: streams };
+        let mixer = Self { tracks, sinks: Arc::default(), monitor, _streams: streams, mic_stop: Mutex::new(None), mic_device: Mutex::new(None) };
         mixer.spawn();
         mixer
+    }
+
+    /// Choisit le micro (vide : celui par défaut, "off" : aucun) ; ne fait rien s'il n'a pas changé.
+    pub fn set_mic(&self, device: &str) {
+        let mut current = self.mic_device.lock();
+        if current.as_deref() == Some(device) {
+            return;
+        }
+        *current = Some(device.to_string());
+        if let Some(stop) = self.mic_stop.lock().take() {
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        let Some(mic) = self.get(MIC) else { return };
+        *mic.error.lock() = None;
+        mic.ring.lock().clear();
+        if device == "off" {
+            return;
+        }
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        start_input(device.to_string(), false, mic, stop.clone());
+        *self.mic_stop.lock() = Some(stop);
     }
 
     /// Piste d'une source (créée au besoin).

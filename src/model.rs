@@ -66,11 +66,24 @@ pub struct AudioSettings {
     pub mic_filters: AudioFilters,
     /// Écoute au casque du micro.
     pub mic_monitor: bool,
+    /// Micro utilisé : vide = celui par défaut, "off" = aucun.
+    pub mic_device: String,
+    /// Son du bureau dans le mixage.
+    pub desktop_audio: bool,
 }
 
 impl Default for AudioSettings {
     fn default() -> Self {
-        Self { mic_volume: 1.0, mic_muted: false, desktop_volume: 1.0, desktop_muted: false, mic_filters: AudioFilters::default(), mic_monitor: false }
+        Self {
+            mic_volume: 1.0,
+            mic_muted: false,
+            desktop_volume: 1.0,
+            desktop_muted: false,
+            mic_filters: AudioFilters::default(),
+            mic_monitor: false,
+            mic_device: String::new(),
+            desktop_audio: true,
+        }
     }
 }
 
@@ -174,6 +187,80 @@ pub struct Settings {
     pub auto_update: bool,
     /// Réglages de la version Electron déjà repris (une seule fois).
     pub electron_imported: bool,
+    /// Demander confirmation avant d'arrêter le streaming.
+    pub confirm_stop_stream: bool,
+    /// Réduire dans la zone de notification.
+    pub minimize_to_tray: bool,
+    /// Pendant un live, ne plus redessiner l'aperçu quand MyStream n'est pas au premier plan.
+    pub auto_hide_preview: bool,
+    /// Disposition des docks, barre « En direct », assistant.
+    pub ui: UiSettings,
+}
+
+/// Disposition des docks : rangée du bas et colonne de droite, comme la version Electron.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Layout {
+    pub bottom: Vec<String>,
+    pub side: Vec<String>,
+    /// Docks masqués.
+    pub hidden: Vec<String>,
+}
+
+pub const DOCKS: [(&str, &str); 7] = [
+    ("scenes", "Scènes"),
+    ("sources", "Sources"),
+    ("mixer", "Mixeur audio"),
+    ("transitions", "Transitions"),
+    ("controls", "Commandes"),
+    ("chat", "Chat"),
+    ("liveinfo", "Titre et catégorie"),
+];
+
+impl Default for Layout {
+    fn default() -> Self {
+        Self {
+            bottom: ["scenes", "sources", "mixer", "transitions", "controls"].map(String::from).to_vec(),
+            side: ["chat", "liveinfo"].map(String::from).to_vec(),
+            hidden: Vec::new(),
+        }
+    }
+}
+
+impl Layout {
+    /// Chaque dock présent une seule fois, dans une seule zone.
+    pub fn normalized(mut self) -> Self {
+        let known = |d: &String| DOCKS.iter().any(|(k, _)| k == d);
+        self.bottom.retain(known);
+        self.side.retain(|d| known(d));
+        let bottom = self.bottom.clone();
+        self.side.retain(|d| !bottom.contains(d));
+        for (k, _) in DOCKS {
+            if !self.bottom.iter().any(|d| d == k) && !self.side.iter().any(|d| d == k) {
+                if ["chat", "liveinfo"].contains(&k) { self.side.push(k.into()) } else { self.bottom.push(k.into()) }
+            }
+        }
+        self
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UiSettings {
+    pub layout: Layout,
+    /// Dispositions enregistrées par nom.
+    pub layouts: std::collections::BTreeMap<String, Layout>,
+    /// Barre « En direct » au-dessus de l'aperçu pendant le live.
+    pub live_bar: bool,
+    /// Assistant de configuration déjà proposé.
+    #[serde(default = "yes")]
+    pub wizard_done: bool,
+}
+
+impl Default for UiSettings {
+    fn default() -> Self {
+        Self { layout: Layout::default(), layouts: Default::default(), live_bar: true, wizard_done: false }
+    }
 }
 
 impl Default for Settings {
@@ -193,6 +280,10 @@ impl Default for Settings {
             chat: ChatSettings::default(),
             auto_update: true,
             electron_imported: false,
+            confirm_stop_stream: true,
+            minimize_to_tray: false,
+            auto_hide_preview: true,
+            ui: UiSettings::default(),
         }
     }
 }
@@ -610,6 +701,7 @@ impl Project {
 
     pub fn load() -> Self {
         let path = Self::path();
+        let existed = path.exists();
         let mut p: Project = match std::fs::read_to_string(&path) {
             Ok(text) => match serde_json::from_str(&text) {
                 Ok(p) => p,
@@ -623,6 +715,9 @@ impl Project {
             },
             Err(_) => Project::default(),
         };
+        // L'assistant n'est proposé qu'au tout premier lancement.
+        p.settings.ui.wizard_done |= existed;
+        p.settings.ui.layout = p.settings.ui.layout.clone().normalized();
         if p.scenes.is_empty() {
             p = Project { settings: p.settings, ..Project::default() };
         }

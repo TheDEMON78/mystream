@@ -37,6 +37,9 @@ pub struct Shared {
     pub sizes: Mutex<HashMap<u64, (u32, u32)>>,
     pub outputs: Mutex<HashMap<KindKey, Output>>,
     pub stats: Mutex<EngineStats>,
+    /// Aperçu en pause (live en cours, MyStream pas au premier plan) : l'interface
+    /// n'est plus redessinée à chaque image, ce qui allège la carte graphique en jeu.
+    pub preview_paused: std::sync::atomic::AtomicBool,
 }
 
 /// Transition : la scène précédente (figée au moment du changement) laisse place à la nouvelle.
@@ -229,7 +232,11 @@ impl Engine {
                         s.render_ms = render_ms;
                         window = (Instant::now(), 0);
                     }
-                    ctx.request_repaint();
+                    if shared.preview_paused.load(Ordering::Relaxed) {
+                        ctx.request_repaint_after(Duration::from_millis(250));
+                    } else {
+                        ctx.request_repaint();
+                    }
                     next += period;
                 }
             })

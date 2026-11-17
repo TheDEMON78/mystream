@@ -5,7 +5,7 @@ use super::App;
 use crate::theme;
 use egui::{RichText, vec2};
 use serde::{Deserialize, Serialize};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// Live en cours.
 pub struct Session {
@@ -77,6 +77,18 @@ impl App {
     }
 
     /// Mesures prises pendant le live (débit, spectateurs).
+    /// Durée du live en cours.
+    pub(super) fn live_elapsed(&self) -> Option<Duration> {
+        self.session.as_ref().map(|s| s.start.elapsed())
+    }
+
+    /// Images perdues depuis le début du live.
+    pub(super) fn live_lost(&self) -> u64 {
+        let Some(s) = &self.session else { return 0 };
+        let st = self.shared.stats.lock();
+        (st.lagged - s.lagged0) + (st.dropped - s.dropped0)
+    }
+
     pub(super) fn session_tick(&mut self, viewers: Option<u64>) {
         let rate = self.shared.outputs.lock().get(&crate::engine::key(crate::output::Kind::Stream)).map(|o| o.stats.lock().bitrate_kbps);
         let Some(s) = self.session.as_mut() else { return };

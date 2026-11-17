@@ -48,6 +48,7 @@ windows = { version = "*", features = ["Win32_Foundation", "Win32_UI_Shell", "Wi
 wry = "0.57.2"
 webview2-com = "0.39"
 raw-window-handle = "0.6"
+tray-icon = "0.26.1"
 
 [target.'cfg(not(windows))'.dependencies]
 xcap = "*"

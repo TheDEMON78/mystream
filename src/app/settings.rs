@@ -19,12 +19,13 @@ pub enum Tab {
     Chat,
     Video,
     Record,
+    Audio,
     StreamDeck,
     Hotkeys,
 }
 
 impl Tab {
-    const ALL: [Tab; 8] = [Tab::General, Tab::Stream, Tab::Restream, Tab::Chat, Tab::Video, Tab::Record, Tab::StreamDeck, Tab::Hotkeys];
+    const ALL: [Tab; 9] = [Tab::General, Tab::Stream, Tab::Restream, Tab::Chat, Tab::Video, Tab::Record, Tab::Audio, Tab::StreamDeck, Tab::Hotkeys];
 
     pub fn from_index(n: usize) -> Self {
         Self::ALL[n.min(Self::ALL.len() - 1)]
@@ -38,6 +39,7 @@ impl Tab {
             Tab::Chat => "Chat",
             Tab::Video => "Vidéo",
             Tab::Record => "Enregistrement",
+            Tab::Audio => "Audio",
             Tab::StreamDeck => "Stream Deck",
             Tab::Hotkeys => "Raccourcis",
         }
@@ -51,6 +53,7 @@ impl Tab {
             Tab::Chat => "💬",
             Tab::Video => "🖥",
             Tab::Record => "⏺",
+            Tab::Audio => "🎤",
             Tab::StreamDeck => "🎮",
             Tab::Hotkeys => "⌨",
         }
@@ -130,7 +133,16 @@ impl App {
         let def = Settings::default();
         let d = &mut self.draft;
         match self.settings_tab {
-            Tab::General => d.auto_update = def.auto_update,
+            Tab::General => {
+                d.auto_update = def.auto_update;
+                d.confirm_stop_stream = def.confirm_stop_stream;
+                d.minimize_to_tray = def.minimize_to_tray;
+                d.auto_hide_preview = def.auto_hide_preview;
+            }
+            Tab::Audio => {
+                d.audio.mic_device = def.audio.mic_device;
+                d.audio.desktop_audio = def.audio.desktop_audio;
+            }
             Tab::Stream => {
                 let (server, key) = (d.stream.server.clone(), d.stream.key.clone());
                 d.stream = def.stream;
@@ -205,6 +217,7 @@ impl App {
                                 Tab::Chat => self.tab_chat(ui),
                                 Tab::Video => self.tab_video(ui),
                                 Tab::Record => self.tab_record(ui),
+                                Tab::Audio => self.tab_audio(ui),
                                 Tab::StreamDeck => self.tab_streamdeck(ui),
                                 Tab::Hotkeys => self.tab_hotkeys(ui),
                             }
@@ -283,6 +296,10 @@ impl App {
     /* Onglets ------------------------------------------------------------- */
 
     fn tab_general(&mut self, ui: &mut egui::Ui) {
+        section(ui, "Live");
+        ui.checkbox(&mut self.draft.confirm_stop_stream, "Demander confirmation avant d'arrêter le streaming");
+        ui.checkbox(&mut self.draft.auto_hide_preview, "Pendant un live, mettre l'aperçu en pause quand MyStream n'est pas au premier plan (allège la carte graphique en jeu)");
+        ui.checkbox(&mut self.draft.minimize_to_tray, "Réduire dans la zone de notification (près de l'horloge)");
         section(ui, "Mises à jour");
         ui.checkbox(&mut self.draft.auto_update, "Installer automatiquement les mises à jour");
         hint(ui, "MyStream vérifie au démarrage puis toutes les 30 minutes. La mise à jour se télécharge en arrière-plan, jamais pendant un live ou un enregistrement, et s'applique au prochain lancement.");
@@ -313,13 +330,7 @@ impl App {
         section(ui, "Destination");
         grid(ui, "stream", |ui| {
             ui.label("Service");
-            egui::ComboBox::from_id_salt("service")
-                .width(300.0)
-                .selected_text(if d.stream.service == "restream" { "Restream (votre application)" } else { "Serveur RTMP personnalisé" })
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut d.stream.service, "restream".to_string(), "Restream (votre application)");
-                    ui.selectable_value(&mut d.stream.service, "custom".to_string(), "Serveur RTMP personnalisé");
-                });
+            super::extras::service_combo(ui, "service", &mut d.stream);
             ui.end_row();
             if d.stream.service != "restream" {
                 ui.label("Serveur");
@@ -500,6 +511,30 @@ impl App {
             ui.end_row();
         });
         hint(ui, "MKV est recommandé : le fichier reste lisible même si le PC s'arrête pendant l'enregistrement.");
+    }
+
+    fn tab_audio(&mut self, ui: &mut egui::Ui) {
+        let a = &mut self.draft.audio;
+        grid(ui, "audio", |ui| {
+            ui.label("Micro / auxiliaire");
+            let label = |m: &str| match m {
+                "" => "Micro par défaut de Windows".to_string(),
+                "off" => "Désactivé".to_string(),
+                m => m.to_string(),
+            };
+            egui::ComboBox::from_id_salt("micro").width(300.0).selected_text(label(&a.mic_device)).show_ui(ui, |ui| {
+                ui.selectable_value(&mut a.mic_device, String::new(), label(""));
+                ui.selectable_value(&mut a.mic_device, "off".to_string(), label("off"));
+                for m in crate::audio::input_devices() {
+                    ui.selectable_value(&mut a.mic_device, m.clone(), m);
+                }
+            });
+            ui.end_row();
+            ui.label("");
+            ui.checkbox(&mut a.desktop_audio, "Capturer le son du bureau (tout le PC, hors MyStream)");
+            ui.end_row();
+        });
+        hint(ui, "Pour un autre micro ou une carte son en plus, ajoutez une source « Entrée audio » (avec suppression du bruit).");
     }
 
     fn tab_streamdeck(&mut self, ui: &mut egui::Ui) {

@@ -181,6 +181,17 @@ impl App {
         }
     }
 
+    /// Plateformes connectées : nom, spectateurs, couleur (barre « En direct »).
+    pub(super) fn live_platforms(&self) -> Vec<(String, Option<u64>, Color32)> {
+        if !self.restream_used() {
+            return Vec::new();
+        }
+        let info = self.live.info.lock();
+        info.as_ref()
+            .map(|l| l.iter().filter(|(_, i)| i.connected).map(|(p, i)| (platform_name(p).to_string(), i.viewers, rgb(platform_color(p)))).collect())
+            .unwrap_or_default()
+    }
+
     /// Spectateurs de toutes les plateformes connectées (pour le pic du live).
     pub(super) fn live_viewers(&self) -> Option<u64> {
         let info = self.live.info.lock();

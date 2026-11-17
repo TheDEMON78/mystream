@@ -75,6 +75,11 @@ droits administrateur, raccourcis sur le bureau et dans le menu Démarrer), ou
   partagées ou indépendantes), export / import de la collection, sauvegardes
   automatiques.
 
+- **Interface** : docks masquables et déplaçables (rangée du bas, colonne de
+  droite), dispositions enregistrées, barre « En direct », assistant de
+  configuration, zone de notification, calage magnétique dans l'aperçu
+  (Alt pour le désactiver), journaux et diagnostic de performance (Aide).
+
 ## Ce qui manque encore (par rapport à la version Electron)
 
 1. Interaction avec les pages des sources navigateur (clics, saisie), pour
