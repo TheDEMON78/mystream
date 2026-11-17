@@ -131,7 +131,18 @@ pub fn encoder_label(enc: &str) -> &'static str {
 }
 
 /// Arguments de l'encodeur vidéo, débit constant (réglages proches d'OBS « Qualité »).
-fn video_args(enc: &str, kbps: u32, fps: u32) -> Vec<String> {
+/// Préréglages x264, du plus léger au plus soigné.
+pub const PRESETS: [(&str, &str); 6] = [
+    ("ultrafast", "ultrafast : le plus léger"),
+    ("superfast", "superfast"),
+    ("veryfast", "veryfast : recommandé"),
+    ("faster", "faster"),
+    ("fast", "fast"),
+    ("medium", "medium : meilleure image, processeur très sollicité"),
+];
+
+fn video_args(enc: &str, kbps: u32, fps: u32, preset: &str) -> Vec<String> {
+    let preset = if PRESETS.iter().any(|(p, _)| *p == preset) { preset } else { "veryfast" };
     let rate = format!("{kbps}k");
     let buf = format!("{}k", kbps * 2);
     let gop = (fps * 2).to_string();
@@ -140,7 +151,9 @@ fn video_args(enc: &str, kbps: u32, fps: u32) -> Vec<String> {
         "h264_qsv" => vec!["-c:v", enc, "-preset", "medium"],
         "h264_amf" => vec!["-c:v", enc, "-usage", "transcoding", "-quality", "quality", "-rc", "cbr"],
         "h264_videotoolbox" => vec!["-c:v", enc, "-realtime", "1"],
-        _ => vec!["-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency"],
+        // WebM : VP9 en temps réel (processeur).
+        "libvpx-vp9" => vec!["-c:v", enc, "-deadline", "realtime", "-cpu-used", "8", "-row-mt", "1"],
+        _ => vec!["-c:v", "libx264", "-preset", preset, "-tune", "zerolatency"],
     };
     a.extend(["-b:v", &rate, "-maxrate", &rate, "-bufsize", &buf, "-g", &gop]);
     a.into_iter().map(String::from).collect()
@@ -182,7 +195,7 @@ impl Output {
         args.extend(["-map", "0:v", "-map", "1:a"].into_iter().map(String::from));
         let (target, file) = match kind {
             Kind::Stream => {
-                args.extend(video_args(&encoder, s.stream.video_bitrate, fps));
+                args.extend(video_args(&encoder, s.stream.video_bitrate, fps, &s.stream.preset));
                 match target {
                     Some(url) => (url, None),
                     None => {
@@ -194,17 +207,24 @@ impl Output {
                 }
             }
             Kind::Record => {
-                args.extend(video_args(&encoder, s.record.video_bitrate, fps));
-                let name = format!("{}.{}", chrono_like_now(), if s.record.format == "mp4" { "mp4" } else { "mkv" });
+                let webm = s.record.format == "webm";
+                args.extend(video_args(if webm { "libvpx-vp9" } else { &encoder }, s.record.video_bitrate, fps, &s.record.preset));
+                let ext = match s.record.format.as_str() {
+                    "mp4" => "mp4",
+                    "webm" => "webm",
+                    _ => "mkv",
+                };
+                let name = format!("{}.{ext}", chrono_like_now());
                 let path = PathBuf::from(&s.record.folder).join(name);
                 (path.to_string_lossy().into_owned(), Some(path))
             }
         };
-        let ab = format!("{}k", s.stream.audio_bitrate.max(64));
+        let ab = format!("{}k", if kind == Kind::Record { s.record.audio_bitrate } else { s.stream.audio_bitrate }.max(64));
+        let webm = kind == Kind::Record && s.record.format == "webm";
         args.extend(
             [
                 "-pix_fmt",
-                "nv12",
+                if webm { "yuv420p" } else { "nv12" },
                 "-colorspace",
                 "bt709",
                 "-color_primaries",
@@ -214,7 +234,7 @@ impl Output {
                 "-color_range",
                 "tv",
                 "-c:a",
-                "aac",
+                if webm { "libopus" } else { "aac" },
                 "-b:a",
                 &ab,
                 "-ar",
@@ -228,6 +248,7 @@ impl Output {
             Kind::Record if file.as_ref().is_some_and(|f| f.extension().is_some_and(|e| e == "mp4")) => {
                 args.extend(["-movflags", "+faststart"].into_iter().map(String::from))
             }
+            Kind::Record if webm => args.extend(["-f", "webm"].into_iter().map(String::from)),
             Kind::Record => args.extend(["-f", "matroska"].into_iter().map(String::from)),
         }
         args.push(target);

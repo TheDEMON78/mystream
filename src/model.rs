@@ -18,11 +18,21 @@ pub struct StreamSettings {
     pub encoder: String,
     /// Service : "restream" (application Restream de BloopStudio) ou "custom" (serveur RTMP).
     pub service: String,
+    /// Préréglage x264 (encodage par le processeur).
+    pub preset: String,
 }
 
 impl Default for StreamSettings {
     fn default() -> Self {
-        Self { server: String::new(), key: String::new(), video_bitrate: 6000, audio_bitrate: 160, encoder: "auto".into(), service: "custom".into() }
+        Self {
+            server: String::new(),
+            key: String::new(),
+            video_bitrate: 6000,
+            audio_bitrate: 160,
+            encoder: "auto".into(),
+            service: "custom".into(),
+            preset: "veryfast".into(),
+        }
     }
 }
 
@@ -30,15 +40,18 @@ impl Default for StreamSettings {
 #[serde(default)]
 pub struct RecordSettings {
     pub folder: String,
-    /// "mkv" (résiste aux coupures) ou "mp4".
+    /// "mkv" (résiste aux coupures), "mp4" ou "webm".
     pub format: String,
     pub video_bitrate: u32,
+    pub audio_bitrate: u32,
+    /// Préréglage x264 (encodage par le processeur).
+    pub preset: String,
 }
 
 impl Default for RecordSettings {
     fn default() -> Self {
         let folder = dirs::video_dir().or_else(dirs::home_dir).unwrap_or_else(|| PathBuf::from(".")).to_string_lossy().into_owned();
-        Self { folder, format: "mkv".into(), video_bitrate: 40000 }
+        Self { folder, format: "mkv".into(), video_bitrate: 40000, audio_bitrate: 320, preset: "veryfast".into() }
     }
 }
 
@@ -518,11 +531,17 @@ pub struct Transition {
     pub stinger_file: String,
     /// Moment où la scène change, depuis le début de la vidéo.
     pub stinger_point_ms: u32,
+    /// Glissement : "left", "right", "up" ou "down" (sens du mouvement).
+    #[serde(default = "left")]
+    pub direction: String,
+    /// Son de l'animation du stinger dans le live.
+    #[serde(default = "yes")]
+    pub stinger_audio: bool,
 }
 
 impl Default for Transition {
     fn default() -> Self {
-        Self { kind: TransitionKind::Fade, duration_ms: 300, stinger_file: String::new(), stinger_point_ms: 500 }
+        Self { kind: TransitionKind::Fade, duration_ms: 300, stinger_file: String::new(), stinger_point_ms: 500, direction: left(), stinger_audio: true }
     }
 }
 

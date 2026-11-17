@@ -31,6 +31,8 @@ pub struct Track {
     pub filters: Mutex<crate::model::AudioFilters>,
     /// Écoute au casque.
     pub monitor: std::sync::atomic::AtomicBool,
+    /// Source absente de la scène à l'antenne : son ni mixé ni affiché.
+    pub off_air: std::sync::atomic::AtomicBool,
 }
 
 /// État des filtres dynamiques d'une piste (suiveur d'enveloppe).
@@ -367,7 +369,8 @@ impl Mixer {
                     let mut listening = false;
                     for (id, track) in list {
                         let (vol, muted) = *track.gain.lock();
-                        let vol = if muted { 0.0 } else { vol };
+                        let off_air = track.off_air.load(std::sync::atomic::Ordering::Relaxed);
+                        let vol = if muted || off_air { 0.0 } else { vol };
                         let mut block = vec![0.0f32; BLOCK * 2];
                         {
                             let mut r = track.ring.lock();
@@ -382,7 +385,7 @@ impl Mixer {
                         if filters != crate::model::AudioFilters::default() {
                             apply_filters(&filters, dynamics.entry(id).or_default(), &mut block);
                         }
-                        let monitored = track.monitor.load(std::sync::atomic::Ordering::Relaxed) && !muted;
+                        let monitored = track.monitor.load(std::sync::atomic::Ordering::Relaxed) && !muted && !off_air;
                         listening |= monitored;
                         let mut peak = 0.0f32;
                         for (i, s) in mix.iter_mut().enumerate() {

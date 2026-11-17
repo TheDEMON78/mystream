@@ -168,6 +168,14 @@ impl App {
             }
             ui.close();
         }
+        let label = match self.project.scene(id).and_then(|s| s.transition.as_ref()) {
+            Some(t) => format!("Transition vers cette scène… ({})", t.kind.label()),
+            None => "Transition vers cette scène…".to_string(),
+        };
+        if ui.button(label).clicked() {
+            self.scene_transition = Some(id);
+            ui.close();
+        }
         ui.separator();
         if ui.add_enabled(self.project.scenes.len() > 1, egui::Button::new("Supprimer")).clicked() {
             self.project.remove_scene(id);

@@ -51,6 +51,10 @@ pub struct App {
     renaming: Option<(u64, String)>,
     /// Scène à l'antenne lors de la dernière image (pour déclencher les transitions).
     shown: u64,
+    /// Scène dont la transition est en cours de réglage (menu des scènes).
+    scene_transition: Option<u64>,
+    /// Scène quittée par la dernière transition.
+    leaving: u64,
     /// Dernière fois que chaque source était affichée (arrêt des sources cachées).
     last_needed: HashMap<u64, Instant>,
     cameras: Option<Vec<String>>,
@@ -93,6 +97,8 @@ impl App {
         let mut app = Self {
             draft: project.settings.clone(),
             shown: project.current,
+            scene_transition: None,
+            leaving: 0,
             last_needed: HashMap::new(),
             project,
             runtimes: HashMap::new(),
@@ -207,6 +213,17 @@ impl App {
             .collect()
     }
 
+    /// Sources de la scène à l'antenne (et de la scène quittée pendant une transition).
+    fn on_air_sources(&self) -> std::collections::HashSet<u64> {
+        let transition = self.shared.transition.lock().is_some();
+        self.project
+            .scenes
+            .iter()
+            .filter(|sc| sc.id == self.project.current || (transition && sc.id == self.leaving))
+            .flat_map(|sc| sc.items.iter().filter(|i| i.visible).map(|i| i.source))
+            .collect()
+    }
+
     fn sync_runtimes(&mut self) {
         let fps = self.project.settings.fps;
         let chat = self.chat.handle();
@@ -246,6 +263,14 @@ impl App {
                 *t.gain.lock() = (s.volume, s.muted);
                 *t.filters.lock() = s.audio_filters.clone();
                 t.monitor.store(s.monitor, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+        // Seules les sources de la scène à l'antenne (et de celle qu'on quitte pendant
+        // une transition) s'entendent dans le live, comme dans OBS.
+        let on_air = self.on_air_sources();
+        for s in self.project.sources.iter().filter(|s| s.kind.has_audio()) {
+            if let Some(t) = self.mixer.get(s.id) {
+                t.off_air.store(!on_air.contains(&s.id), std::sync::atomic::Ordering::Relaxed);
             }
         }
         let sources = &self.project.sources;
@@ -300,11 +325,15 @@ impl App {
         let program = self.draw_list(self.project.current, &sizes);
         // Changement de scène à l'antenne : transition depuis l'image précédente.
         if self.shown != self.project.current {
-            let t = &self.project.settings.transition;
+            // Transition propre à la scène, sinon celle du dock Transitions.
+            let t = &self.project.scene(self.project.current).and_then(|s| s.transition.clone()).unwrap_or_else(|| self.project.settings.transition.clone());
             let stinger = t.kind == TransitionKind::Stinger && !t.stinger_file.trim().is_empty();
             if (t.kind != TransitionKind::Cut && t.kind != TransitionKind::Stinger && t.duration_ms > 0) || stinger {
                 let from = self.shared.items.lock().clone();
                 // Stinger : la vidéo est lue une fois, son son passe dans le mixage du live.
+                if stinger {
+                    *self.mixer.track(crate::engine::STINGER).gain.lock() = (1.0, !t.stinger_audio);
+                }
                 let stinger = stinger.then(|| crate::engine::Stinger {
                     runtime: Runtime::start(
                         &SourceKind::Media { path: t.stinger_file.clone(), looping: false },
@@ -316,8 +345,16 @@ impl App {
                     first: None,
                 });
                 *self.shared.transition.lock() =
-                    Some(TransitionRun { from, kind: t.kind, start: Instant::now(), duration: Duration::from_millis(t.duration_ms as u64), stinger });
+                    Some(TransitionRun {
+                        from,
+                        kind: t.kind,
+                        start: Instant::now(),
+                        duration: Duration::from_millis(t.duration_ms as u64),
+                        stinger,
+                        direction: t.direction.clone(),
+                    });
             }
+            self.leaving = self.shown;
             self.shown = self.project.current;
         }
         *self.shared.items.lock() = program;
@@ -930,7 +967,9 @@ impl App {
                     open = Some(id);
                 }
             }
-            for s in self.project.sources.iter_mut().filter(|s| s.kind.has_audio()) {
+            // Comme dans OBS : seulement les sources de la scène à l'antenne.
+            let on_air = self.on_air_sources();
+            for s in self.project.sources.iter_mut().filter(|s| s.kind.has_audio() && on_air.contains(&s.id)) {
                 let t = self.mixer.get(s.id);
                 let level = t.as_ref().map(|t| *t.level.lock()).unwrap_or(0.0);
                 let err = t.as_ref().and_then(|t| t.error.lock().clone());
@@ -951,42 +990,42 @@ impl App {
 
     fn transitions_dock(&mut self, ui: &mut egui::Ui) {
         theme::dock(ui, "Transitions", false, |ui, _| {
-            let t = &mut self.project.settings.transition;
-            let mut changed = false;
-            ui.label(RichText::new("Type").color(theme::MUTED));
-            egui::ComboBox::from_id_salt("transition").width((ui.available_width() - 8.0).max(0.0)).selected_text(t.kind.label()).show_ui(ui, |ui| {
-                for k in [TransitionKind::Cut, TransitionKind::Fade, TransitionKind::Slide, TransitionKind::Stinger] {
-                    changed |= ui.selectable_value(&mut t.kind, k, k.label()).changed();
-                }
-            });
-            ui.add_space(8.0);
-            if t.kind == TransitionKind::Stinger {
-                let name = std::path::Path::new(&t.stinger_file).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Aucune vidéo".into());
-                ui.label(RichText::new(name).small().color(theme::MUTED));
-                if ui.add(egui::Button::new("Choisir la vidéo…").min_size(vec2((ui.available_width() - 8.0).max(0.0), 26.0))).clicked()
-                    && let Some(p) = rfd::FileDialog::new().add_filter("Vidéos", &["webm", "mov", "mp4", "mkv", "avi"]).pick_file()
-                {
-                    t.stinger_file = p.to_string_lossy().into_owned();
-                    changed = true;
-                }
-                ui.label(RichText::new("Point de coupe (ms)").color(theme::MUTED)).on_hover_text("Moment de la vidéo où la scène change (quand l'animation couvre l'écran)");
-                changed |= ui
-                    .add_sized([(ui.available_width() - 8.0).max(0.0), 28.0], egui::DragValue::new(&mut t.stinger_point_ms).range(0..=10000).speed(10))
-                    .changed();
-                if changed {
-                    self.touch();
-                }
-                return;
-            }
-            ui.label(RichText::new("Durée (ms)").color(theme::MUTED));
-            ui.add_enabled_ui(t.kind != TransitionKind::Cut, |ui| {
-                changed |=
-                    ui.add_sized([(ui.available_width() - 8.0).max(0.0), 28.0], egui::DragValue::new(&mut t.duration_ms).range(50..=3000).speed(10)).changed();
-            });
-            if changed {
+            if transition_editor(ui, &mut self.project.settings.transition, "dock") {
                 self.touch();
             }
         });
+    }
+
+    /// Fenêtre « Transition vers cette scène » (menu des scènes).
+    fn scene_transition_window(&mut self, ctx: &egui::Context) {
+        let Some(id) = self.scene_transition else { return };
+        let global = self.project.settings.transition.clone();
+        let Some(scene) = self.project.scene_mut(id) else {
+            self.scene_transition = None;
+            return;
+        };
+        let mut open = true;
+        let mut changed = false;
+        egui::Window::new(format!("Transition vers « {} »", scene.name)).open(&mut open).resizable(false).collapsible(false).show(ctx, |ui| {
+            ui.set_width(300.0);
+            let mut own = scene.transition.is_some();
+            if ui.checkbox(&mut own, "Transition propre à cette scène").changed() {
+                scene.transition = own.then(|| global.clone());
+                changed = true;
+            }
+            match &mut scene.transition {
+                Some(t) => changed |= transition_editor(ui, t, "scene"),
+                None => {
+                    ui.label(RichText::new(format!("Celle du dock Transitions : {}", global.kind.label())).color(theme::MUTED));
+                }
+            }
+        });
+        if changed {
+            self.touch();
+        }
+        if !open {
+            self.scene_transition = None;
+        }
     }
 
     fn commands_dock(&mut self, ui: &mut egui::Ui) {
@@ -1807,6 +1846,7 @@ impl eframe::App for App {
         self.properties_window(&ctx);
         self.audio_filters_window(&ctx);
         self.transform_window(&ctx);
+        self.scene_transition_window(&ctx);
         // Raccourcis de l'interface (hors champs de saisie).
         if !ctx.egui_wants_keyboard_input() {
             let (undo, redo, transform) = ctx.input(|i| {
@@ -1858,6 +1898,53 @@ impl eframe::App for App {
 }
 
 /// Version affichée (numéro de la préversion GitHub).
+/// Réglages d'une transition (dock Transitions et transition propre à une scène).
+fn transition_editor(ui: &mut egui::Ui, t: &mut crate::model::Transition, id: &str) -> bool {
+    let mut changed = false;
+    let full = |ui: &egui::Ui| (ui.available_width() - 8.0).max(0.0);
+    ui.label(RichText::new("Type").color(theme::MUTED));
+    egui::ComboBox::from_id_salt(("transition", id)).width(full(ui)).selected_text(t.kind.label()).show_ui(ui, |ui| {
+        for k in [TransitionKind::Cut, TransitionKind::Fade, TransitionKind::Slide, TransitionKind::Stinger] {
+            changed |= ui.selectable_value(&mut t.kind, k, k.label()).changed();
+        }
+    });
+    ui.add_space(6.0);
+    if t.kind == TransitionKind::Stinger {
+        let name = std::path::Path::new(&t.stinger_file).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Aucune vidéo".into());
+        ui.label(RichText::new(name).small().color(theme::MUTED));
+        if ui.add(egui::Button::new("Choisir la vidéo ou le GIF…").min_size(vec2(full(ui), 26.0))).clicked()
+            && let Some(p) = rfd::FileDialog::new().add_filter("Vidéos et GIF", &["webm", "mov", "mp4", "mkv", "avi", "gif"]).pick_file()
+        {
+            t.stinger_file = p.to_string_lossy().into_owned();
+            changed = true;
+        }
+        ui.label(RichText::new("Point de coupe (ms)").color(theme::MUTED)).on_hover_text("Moment de la vidéo où la scène change (quand l'animation couvre l'écran)");
+        changed |= ui.add_sized([full(ui), 26.0], egui::DragValue::new(&mut t.stinger_point_ms).range(0..=20000).speed(10)).changed();
+        changed |= ui.checkbox(&mut t.stinger_audio, "Son de l'animation").changed();
+        return changed;
+    }
+    ui.label(RichText::new("Durée (ms)").color(theme::MUTED));
+    ui.add_enabled_ui(t.kind != TransitionKind::Cut, |ui| {
+        changed |= ui.add_sized([full(ui), 26.0], egui::DragValue::new(&mut t.duration_ms).range(50..=10000).speed(10)).changed();
+    });
+    if t.kind == TransitionKind::Slide {
+        ui.add_space(4.0);
+        ui.label(RichText::new("Direction").color(theme::MUTED));
+        let label = |d: &str| match d {
+            "right" => "Vers la droite",
+            "up" => "Vers le haut",
+            "down" => "Vers le bas",
+            _ => "Vers la gauche",
+        };
+        egui::ComboBox::from_id_salt(("direction", id)).width(full(ui)).selected_text(label(&t.direction)).show_ui(ui, |ui| {
+            for d in ["left", "right", "up", "down"] {
+                changed |= ui.selectable_value(&mut t.direction, d.to_string(), label(d)).changed();
+            }
+        });
+    }
+    changed
+}
+
 fn version_label() -> String {
     match crate::update::build() {
         0 => "natif (développement)".into(),

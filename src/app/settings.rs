@@ -74,6 +74,16 @@ fn grid(ui: &mut egui::Ui, id: &str, content: impl FnOnce(&mut egui::Ui)) {
     egui::Grid::new(id).num_columns(2).spacing(vec2(14.0, 8.0)).min_col_width(170.0).show(ui, content);
 }
 
+/// Préréglage x264 (utilisé quand l'encodeur est le processeur).
+fn preset_combo(ui: &mut egui::Ui, id: &str, preset: &mut String) {
+    let label = |p: &str| output::PRESETS.iter().find(|(k, _)| *k == p).map(|(_, l)| *l).unwrap_or("veryfast : recommandé");
+    egui::ComboBox::from_id_salt(id).width(300.0).selected_text(label(preset)).show_ui(ui, |ui| {
+        for (k, l) in output::PRESETS {
+            ui.selectable_value(preset, k.to_string(), l);
+        }
+    });
+}
+
 /// Combinaison enregistrée (« ctrl+shift+KeyS ») en texte lisible (« Ctrl + Maj + S »).
 pub fn pretty_hotkey(text: &str) -> String {
     text.split('+')
@@ -343,6 +353,9 @@ impl App {
                 }
             });
             ui.end_row();
+            ui.label("Préréglage x264");
+            preset_combo(ui, "preset-stream", &mut d.stream.preset);
+            ui.end_row();
         });
         hint(ui, "Twitch accepte jusqu'à 6 000 kb/s (8 000 pour les partenaires), Kick jusqu'à 8 000 kb/s.");
     }
@@ -461,16 +474,29 @@ impl App {
             });
             ui.end_row();
             ui.label("Format");
-            egui::ComboBox::from_id_salt("fmt")
-                .width(300.0)
-                .selected_text(if d.record.format == "mp4" { "MP4 (H.264 / AAC)" } else { "MKV (H.264 / AAC), résiste aux coupures" })
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut d.record.format, "mkv".to_string(), "MKV (H.264 / AAC), résiste aux coupures");
-                    ui.selectable_value(&mut d.record.format, "mp4".to_string(), "MP4 (H.264 / AAC)");
-                });
+            let label = |f: &str| match f {
+                "mp4" => "MP4 (H.264 / AAC)",
+                "webm" => "WebM (VP9 / Opus), encodé par le processeur",
+                _ => "MKV (H.264 / AAC), résiste aux coupures",
+            };
+            egui::ComboBox::from_id_salt("fmt").width(300.0).selected_text(label(&d.record.format)).show_ui(ui, |ui| {
+                for f in ["mkv", "mp4", "webm"] {
+                    ui.selectable_value(&mut d.record.format, f.to_string(), label(f));
+                }
+            });
             ui.end_row();
             ui.label("Débit vidéo");
             ui.add(egui::DragValue::new(&mut d.record.video_bitrate).range(2000..=150000).speed(100).suffix(" kb/s"));
+            ui.end_row();
+            ui.label("Débit audio");
+            egui::ComboBox::from_id_salt("rab").selected_text(format!("{} kb/s", d.record.audio_bitrate)).show_ui(ui, |ui| {
+                for b in [128, 160, 192, 256, 320] {
+                    ui.selectable_value(&mut d.record.audio_bitrate, b, format!("{b} kb/s"));
+                }
+            });
+            ui.end_row();
+            ui.label("Préréglage x264");
+            preset_combo(ui, "preset-rec", &mut d.record.preset);
             ui.end_row();
         });
         hint(ui, "MKV est recommandé : le fichier reste lisible même si le PC s'arrête pendant l'enregistrement.");

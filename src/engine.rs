@@ -46,6 +46,8 @@ pub struct TransitionRun {
     pub start: Instant,
     pub duration: Duration,
     pub stinger: Option<Stinger>,
+    /// Glissement : "left", "right", "up" ou "down".
+    pub direction: String,
 }
 
 /// Vidéo du stinger en cours de lecture.
@@ -89,7 +91,7 @@ fn blend_stinger(to: &[DrawItem], run: &mut TransitionRun, width: f32, height: f
 }
 
 /// Liste à dessiner pendant une transition (premier plan en tête de liste).
-fn blend(to: &[DrawItem], run: &TransitionRun, width: f32) -> Option<Vec<DrawItem>> {
+fn blend(to: &[DrawItem], run: &TransitionRun, width: f32, height: f32) -> Option<Vec<DrawItem>> {
     let p = run.start.elapsed().as_secs_f32() / run.duration.as_secs_f32().max(0.001);
     if p >= 1.0 || run.kind == TransitionKind::Cut {
         return None;
@@ -100,8 +102,21 @@ fn blend(to: &[DrawItem], run: &TransitionRun, width: f32) -> Option<Vec<DrawIte
     match run.kind {
         TransitionKind::Fade => out.iter_mut().for_each(|i| i.alpha *= p),
         TransitionKind::Slide => {
-            from.iter_mut().for_each(|i| i.x -= e * width);
-            out.iter_mut().for_each(|i| i.x += (1.0 - e) * width);
+            // La nouvelle scène pousse l'ancienne dans le sens choisi.
+            let (dx, dy) = match run.direction.as_str() {
+                "right" => (width, 0.0),
+                "up" => (0.0, -height),
+                "down" => (0.0, height),
+                _ => (-width, 0.0),
+            };
+            from.iter_mut().for_each(|i| {
+                i.x += e * dx;
+                i.y += e * dy;
+            });
+            out.iter_mut().for_each(|i| {
+                i.x -= (1.0 - e) * dx;
+                i.y -= (1.0 - e) * dy;
+            });
         }
         TransitionKind::Cut | TransitionKind::Stinger => {}
     }
@@ -175,7 +190,7 @@ impl Engine {
                         let items = shared.items.lock();
                         let mut tr = shared.transition.lock();
                         let (cw, ch) = (comp.width as f32, comp.height as f32);
-                        let blended = tr.as_mut().and_then(|run| if run.kind == TransitionKind::Stinger { blend_stinger(&items, run, cw, ch, &mut frames) } else { blend(&items, run, cw) });
+                        let blended = tr.as_mut().and_then(|run| if run.kind == TransitionKind::Stinger { blend_stinger(&items, run, cw, ch, &mut frames) } else { blend(&items, run, cw, ch) });
                         if blended.is_none() {
                             *tr = None;
                         }
