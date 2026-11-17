@@ -12,13 +12,13 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
-struct Fonts {
-    regular: fontdue::Font,
-    bold: fontdue::Font,
+pub struct Fonts {
+    pub regular: fontdue::Font,
+    pub bold: fontdue::Font,
 }
 
 /// Police choisie (fichiers de Windows), sinon celle intégrée.
-fn fonts(name: &str) -> Arc<Fonts> {
+pub fn fonts(name: &str) -> Arc<Fonts> {
     static CACHE: OnceLock<Mutex<HashMap<String, Arc<Fonts>>>> = OnceLock::new();
     let cache = CACHE.get_or_init(Default::default);
     if let Some(f) = cache.lock().get(name) {

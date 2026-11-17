@@ -30,13 +30,13 @@ fn kind_of(src: &Value, project: &Project) -> Option<SourceKind> {
     let id = src["id"].as_str().unwrap_or("");
     let (w, h) = (project.settings.width, project.settings.height);
     Some(match id {
-        "monitor_capture" => SourceKind::Display { monitor: s["monitor"].as_u64().unwrap_or(0) as usize },
+        "monitor_capture" => SourceKind::Display { monitor: s["monitor"].as_u64().unwrap_or(0) as usize, audio: false },
         // « Titre:Classe:programme.exe »
         "window_capture" => SourceKind::Window {
             title: s["window"].as_str().unwrap_or("").split(':').next().unwrap_or("").replace("#3A", ":"),
             audio: s["capture_audio"].as_bool().unwrap_or(false),
         },
-        "game_capture" => SourceKind::Game { audio: s["capture_audio"].as_bool().unwrap_or(true) },
+        "game_capture" => SourceKind::Game { audio: s["capture_audio"].as_bool().unwrap_or(true), method: "window".into() },
         "image_source" => SourceKind::Image { path: s["file"].as_str()?.to_string() },
         "color_source" | "color_source_v2" | "color_source_v3" => SourceKind::Color {
             rgba: color(s["color"].as_u64().unwrap_or(0xffff_ffff)),
@@ -48,13 +48,19 @@ fn kind_of(src: &Value, project: &Project) -> Option<SourceKind> {
             if id.starts_with("text_gdiplus") && s["opacity"].is_u64() {
                 c[3] = (s["opacity"].as_u64().unwrap_or(100) * 255 / 100) as u8;
             }
-            SourceKind::Text {
-                text: s["text"].as_str().unwrap_or("").to_string(),
-                size: s["font"]["size"].as_f64().unwrap_or(36.0) as f32,
-                rgba: c,
-                background: [0, 0, 0, 0],
-                mono: false,
+            let mut kind = SourceKind::text(s["text"].as_str().unwrap_or(""), s["font"]["size"].as_f64().unwrap_or(36.0) as f32, c);
+            if let SourceKind::Text { font, bold, italic, align, outline, .. } = &mut kind {
+                if let Some(f) = s["font"]["face"].as_str() {
+                    *font = f.to_string();
+                }
+                let flags = s["font"]["flags"].as_u64().unwrap_or(0);
+                (*bold, *italic) = (flags & 1 != 0, flags & 2 != 0);
+                if let Some(a) = s["align"].as_str() {
+                    *align = a.to_string();
+                }
+                *outline = s["outline"].as_bool().unwrap_or(false);
             }
+            kind
         }
         "ffmpeg_source" => SourceKind::Media { path: s["local_file"].as_str()?.to_string(), looping: s["looping"].as_bool().unwrap_or(false) },
         "vlc_source" => SourceKind::Media { path: s["playlist"][0]["value"].as_str()?.to_string(), looping: s["loop"].as_bool().unwrap_or(true) },
@@ -148,11 +154,15 @@ pub fn import(path: &Path, project: &mut Project) -> Result<Report, String> {
                 x: it["pos"]["x"].as_f64().unwrap_or(0.0) as f32,
                 y: it["pos"]["y"].as_f64().unwrap_or(0.0) as f32,
                 scale: Some(it["scale"]["x"].as_f64().unwrap_or(1.0) as f32),
+                scale_y: {
+                    let (sx, sy) = (it["scale"]["x"].as_f64().unwrap_or(1.0), it["scale"]["y"].as_f64().unwrap_or(1.0));
+                    ((sx - sy).abs() > 1e-3).then_some(sy as f32)
+                },
                 visible: it["visible"].as_bool().unwrap_or(true),
                 locked: it["locked"].as_bool().unwrap_or(false),
             });
         }
-        project.scenes.push(Scene { id: sid, name: unique, items });
+        project.scenes.push(Scene { id: sid, name: unique, items, transition: None });
         first.get_or_insert(sid);
         if json["current_scene"].as_str() == Some(&name) {
             current = Some(sid);

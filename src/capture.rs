@@ -67,6 +67,9 @@ pub struct Status {
     children: Mutex<Vec<Child>>,
     /// La vidéo est arrivée à la fin (média lu une seule fois).
     pub ended: AtomicBool,
+    /// Images ignorées (capture de l'écran du jeu pendant un Alt+Tab : la dernière image reste).
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub paused: AtomicBool,
     /// Images capturées en alpha prémultiplié (fenêtre transparente) : à convertir.
     #[cfg_attr(not(windows), allow(dead_code))]
     pub premultiplied: AtomicBool,
@@ -121,12 +124,28 @@ impl Runtime {
                 }
                 Err(e) => status.fail(format!("Image illisible ({path}) : {e}")),
             },
-            SourceKind::Text { text, size, rgba, background, mono } => slot.set(render_text(text, *size, *rgba, *background, *mono)),
+            SourceKind::Text { text, size, rgba, background, mono, font, bold, italic, align, outline, outline_color, outline_size } => slot.set(render_text(
+                text,
+                *size,
+                *rgba,
+                *background,
+                *mono,
+                font,
+                *bold,
+                *italic,
+                align,
+                outline.then_some((*outline_color, *outline_size)),
+            )),
             SourceKind::Media { path, looping } => start_media(path.clone(), *looping, slot.clone(), status.clone(), track),
             SourceKind::Camera { device, width, height, fps: cam_fps } => start_camera(device.clone(), *width, *height, *cam_fps, slot.clone(), status.clone()),
-            SourceKind::Display { monitor } => platform::start_display(*monitor, fps, slot.clone(), status.clone()),
+            SourceKind::Display { monitor, audio } => {
+                platform::start_display(*monitor, fps, slot.clone(), status.clone());
+                if *audio && let Some(t) = track {
+                    platform::pc_audio(status.clone(), t);
+                }
+            }
             SourceKind::Window { title, .. } => platform::start_window(title.clone(), fps, slot.clone(), status.clone(), track),
-            SourceKind::Game { .. } => platform::start_game(fps, slot.clone(), status.clone(), track),
+            SourceKind::Game { method, .. } => platform::start_game(fps, method == "screen", slot.clone(), status.clone(), track),
             SourceKind::Chat(style) => crate::overlay::start(chat.clone(), style.clone(), slot.clone(), status.clone()),
             SourceKind::Browser { url, width, height, css, audio } => platform::start_browser(
                 url.clone(),
@@ -138,6 +157,20 @@ impl Runtime {
                 status.clone(),
                 if *audio { track } else { None },
             ),
+            SourceKind::AudioInput { device, noise_suppression } => {
+                if let Some(t) = track {
+                    let stop = Arc::new(AtomicBool::new(false));
+                    crate::audio::start_input(device.clone(), *noise_suppression, t, stop.clone());
+                    // Arrêtée avec la source.
+                    let st = status.clone();
+                    std::thread::spawn(move || {
+                        while !st.stopped() {
+                            std::thread::sleep(Duration::from_millis(200));
+                        }
+                        stop.store(true, Ordering::Relaxed);
+                    });
+                }
+            }
             SourceKind::AppAudio { exe } => {
                 if let Some(t) = track {
                     platform::start_app_audio(exe.clone(), status.clone(), t);
@@ -212,56 +245,118 @@ fn start_gif(path: String, slot: Slot, status: Arc<Status>) {
 
 /* Texte ------------------------------------------------------------------ */
 
-fn render_text(text: &str, size: f32, rgba: [u8; 4], background: [u8; 4], mono: bool) -> Frame {
+#[allow(clippy::too_many_arguments)]
+fn render_text(
+    text: &str,
+    size: f32,
+    rgba: [u8; 4],
+    background: [u8; 4],
+    mono: bool,
+    font: &str,
+    bold: bool,
+    italic: bool,
+    align: &str,
+    outline: Option<([u8; 4], f32)>,
+) -> Frame {
     use std::sync::OnceLock;
-    static FONTS: OnceLock<(fontdue::Font, fontdue::Font)> = OnceLock::new();
-    let (sans, monospace) = FONTS.get_or_init(|| {
-        let f = |b: &'static [u8]| fontdue::Font::from_bytes(b, fontdue::FontSettings::default()).expect("police intégrée");
-        (f(epaint_default_fonts::UBUNTU_LIGHT), f(epaint_default_fonts::HACK_REGULAR))
-    });
-    let font = if mono { monospace } else { sans };
-    let size = size.clamp(6.0, 400.0);
+    static MONO: OnceLock<fontdue::Font> = OnceLock::new();
+    let fonts = crate::overlay::fonts(font);
+    let monospace = MONO.get_or_init(|| fontdue::Font::from_bytes(epaint_default_fonts::HACK_REGULAR, fontdue::FontSettings::default()).expect("police intégrée"));
+    let font = if mono {
+        monospace
+    } else if bold {
+        &fonts.bold
+    } else {
+        &fonts.regular
+    };
+    let size = size.clamp(4.0, 400.0);
     let lm = font.horizontal_line_metrics(size);
     let (ascent, line_h) = lm.map(|m| (m.ascent, m.new_line_size)).unwrap_or((size * 0.8, size * 1.2));
     let lines: Vec<&str> = if text.is_empty() { vec![" "] } else { text.lines().collect() };
-    let pad = (size * 0.25).ceil() as i32;
+    let stroke = outline.map(|o| o.1.clamp(1.0, 40.0)).unwrap_or(0.0);
+    // Italique : les caractères sont penchés (décalage proportionnel à la hauteur).
+    let slant = if italic { 0.2 } else { 0.0 };
+    let pad = (size * 0.25 + stroke).ceil() as i32 + (size * slant).ceil() as i32;
     let widths: Vec<f32> = lines.iter().map(|l| l.chars().map(|c| font.metrics(c, size).advance_width).sum()).collect();
-    let w = (widths.iter().cloned().fold(1.0, f32::max).ceil() as i32 + pad * 2).max(2) as u32;
-    let h = ((line_h * lines.len() as f32).ceil() as i32 + pad * 2).max(2) as u32;
-    let mut data: Vec<u8> = background.iter().copied().cycle().take((w * h * 4) as usize).collect();
+    let max_w = widths.iter().cloned().fold(1.0, f32::max);
+    let w = (max_w.ceil() as i32 + pad * 2).max(2) as usize;
+    let h = ((line_h * lines.len() as f32).ceil() as i32 + pad * 2).max(2) as usize;
+    // Couverture du texte (0 à 1) sur toute l'image.
+    let mut mask = vec![0f32; w * h];
     for (li, line) in lines.iter().enumerate() {
-        let mut x = pad as f32;
+        let mut x = pad as f32
+            + match align {
+                "center" => (max_w - widths[li]) / 2.0,
+                "right" => max_w - widths[li],
+                _ => 0.0,
+            };
         let baseline = pad as f32 + ascent + li as f32 * line_h;
         for c in line.chars() {
             let (m, bitmap) = font.rasterize(c, size);
             let gx = x.round() as i32 + m.xmin;
             let gy = baseline.round() as i32 - m.height as i32 - m.ymin;
             for row in 0..m.height {
+                let py = gy + row as i32;
+                let shift = ((baseline - py as f32) * slant).round() as i32;
                 for col in 0..m.width {
-                    let (px, py) = (gx + col as i32, gy + row as i32);
+                    let px = gx + col as i32 + shift;
                     if px < 0 || py < 0 || px >= w as i32 || py >= h as i32 {
                         continue;
                     }
-                    let a = bitmap[row * m.width + col] as f32 / 255.0 * rgba[3] as f32 / 255.0;
-                    if a <= 0.0 {
-                        continue;
-                    }
-                    let i = ((py as u32 * w + px as u32) * 4) as usize;
-                    // Mélange « par-dessus » (alpha non prémultiplié).
-                    let da = data[i + 3] as f32 / 255.0;
-                    let oa = a + da * (1.0 - a);
-                    for k in 0..3 {
-                        let src = rgba[k] as f32;
-                        let dst = data[i + k] as f32;
-                        data[i + k] = if oa > 0.0 { ((src * a + dst * da * (1.0 - a)) / oa).round() as u8 } else { 0 };
-                    }
-                    data[i + 3] = (oa * 255.0).round() as u8;
+                    let i = py as usize * w + px as usize;
+                    mask[i] = mask[i].max(bitmap[row * m.width + col] as f32 / 255.0);
                 }
             }
             x += m.advance_width;
         }
     }
-    Frame::new(w, h, data)
+    let mut data: Vec<u8> = background.iter().copied().cycle().take(w * h * 4).collect();
+    let mut blend = |i: usize, rgb: &[u8], a: f32| {
+        if a <= 0.0 {
+            return;
+        }
+        let p = &mut data[i * 4..i * 4 + 4];
+        let da = p[3] as f32 / 255.0;
+        let oa = a + da * (1.0 - a);
+        for k in 0..3 {
+            p[k] = ((rgb[k] as f32 * a + p[k] as f32 * da * (1.0 - a)) / oa.max(1e-6)).round() as u8;
+        }
+        p[3] = (oa * 255.0).round() as u8;
+    };
+    // Contour : la couverture du texte élargie d'un disque du rayon voulu.
+    if let Some((oc, _)) = outline {
+        let r = stroke.ceil() as i32;
+        let disk: Vec<(i32, i32, f32)> = (-r..=r)
+            .flat_map(|dy| (-r..=r).map(move |dx| (dx, dy)))
+            .filter_map(|(dx, dy)| {
+                let d = ((dx * dx + dy * dy) as f32).sqrt();
+                (d <= stroke + 0.5).then_some((dx, dy, (stroke + 0.5 - d).min(1.0)))
+            })
+            .collect();
+        let mut grown = vec![0f32; w * h];
+        for y in 0..h as i32 {
+            for x in 0..w as i32 {
+                let m = mask[y as usize * w + x as usize];
+                if m <= 0.0 {
+                    continue;
+                }
+                for &(dx, dy, k) in &disk {
+                    let (nx, ny) = (x + dx, y + dy);
+                    if nx >= 0 && ny >= 0 && nx < w as i32 && ny < h as i32 {
+                        let g = &mut grown[ny as usize * w + nx as usize];
+                        *g = g.max(m * k);
+                    }
+                }
+            }
+        }
+        for (i, g) in grown.iter().enumerate() {
+            blend(i, &oc[..3], g * oc[3] as f32 / 255.0);
+        }
+    }
+    for (i, m) in mask.iter().enumerate() {
+        blend(i, &rgba[..3], m * rgba[3] as f32 / 255.0);
+    }
+    Frame::new(w as u32, h as u32, data)
 }
 
 /* FFmpeg : média et caméra ------------------------------------------------ */
@@ -406,14 +501,23 @@ pub fn cameras() -> Vec<String> {
 
 fn start_camera(device: String, w: u32, h: u32, fps: u32, slot: Slot, status: Arc<Status>) {
     std::thread::spawn(move || {
-        let (w, h) = (w.max(2), h.max(2));
+        // Réglage « Par défaut » (0) : le mode de la caméra, mis en 1920 × 1080 (bandes noires si besoin).
+        let default = w == 0;
+        let (w, h) = if default { (1920, 1080) } else { (w.max(2), h.max(2)) };
         let size = format!("{w}x{h}");
         let rate = fps.max(1).to_string();
         // L'image est mise à la taille demandée en sortie : la taille des images lues est connue.
         let scale = format!("scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:-1:-1:color=black@0");
         // Toutes les caméras n'offrent pas la taille et la cadence demandées : on essaie
         // ensuite la taille seule, puis le réglage par défaut de la caméra.
-        let modes: [&[&str]; 3] = [&["-video_size", &size, "-framerate", &rate], &["-video_size", &size], &[]];
+        let rate_only = ["-framerate", rate.as_str()];
+        let all: [&[&str]; 3] = [&["-video_size", &size, "-framerate", &rate], &["-video_size", &size], &[]];
+        let modes: Vec<&[&str]> = match (default, fps) {
+            (true, 0) => vec![&[]],
+            (true, _) => vec![&rate_only, &[]],
+            (false, 0) => vec![all[1], all[2]],
+            _ => all.to_vec(),
+        };
         let mut last_error = String::new();
         for mode in modes {
             if status.stopped() {
@@ -504,6 +608,9 @@ mod platform {
         fn on_frame_arrived(&mut self, frame: &mut WcFrame, control: InternalCaptureControl) -> Result<(), Self::Error> {
             if self.status.stopped() {
                 control.stop();
+                return Ok(());
+            }
+            if self.status.paused.load(Ordering::Relaxed) {
                 return Ok(());
             }
             let buffer = frame.buffer()?;
@@ -626,7 +733,29 @@ mod platform {
 
     /// Capture de jeu automatique : le jeu reste capturé pendant un alt-tab, jusqu'à
     /// ce qu'il se ferme ou qu'une autre application passe en plein écran.
-    pub fn start_game(fps: u32, slot: Slot, status: Arc<Status>, track: Option<Arc<Track>>) {
+    /// Capture de l'écran où tourne le jeu, tant que la fenêtre du jeu existe. Plus fluide
+    /// que la capture de la fenêtre ; pendant un Alt+Tab, la dernière image du jeu reste.
+    fn capture_game_screen(hwnd: HWND, fps: u32, slot: &Slot, status: &Arc<Status>) -> Result<(), String> {
+        let mon = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
+        let monitor = Monitor::from_raw_hmonitor(mon.0);
+        let sub = Arc::new(Status::default());
+        let control = Handler::start_free_threaded(settings(monitor, false, fps, slot.clone(), sub.clone())).map_err(|e| e.to_string())?;
+        while !status.stopped() && unsafe { IsWindow(Some(hwnd)) }.as_bool() && !control.is_finished() {
+            let front = fullscreen_foreground();
+            // Une autre application passe en plein écran : on la capture à la place.
+            if matches!(front, Some((h, _)) if h != hwnd) {
+                break;
+            }
+            sub.paused.store(unsafe { GetForegroundWindow() } != hwnd, Ordering::Relaxed);
+            *status.fps.lock() = *sub.fps.lock();
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        sub.stop.store(true, Ordering::Relaxed);
+        let _ = control.stop();
+        Ok(())
+    }
+
+    pub fn start_game(fps: u32, screen: bool, slot: Slot, status: Arc<Status>, track: Option<Arc<Track>>) {
         std::thread::spawn(move || {
             *status.info.lock() = Some("En attente d'un jeu en plein écran".into());
             while !status.stopped() {
@@ -643,7 +772,8 @@ mod platform {
                 let audio = track.as_ref().map(|t| process_audio(pid, status.clone(), t.clone()));
                 // Une autre application passe en plein écran : on la capture à la place.
                 let other = move || !matches!(fullscreen_foreground(), Some((h, _)) if h != hwnd);
-                if let Err(e) = capture_window(window, fps, &slot, &status, false, other) {
+                let r = if screen { capture_game_screen(hwnd, fps, &slot, &status) } else { capture_window(window, fps, &slot, &status, false, other) };
+                if let Err(e) = r {
                     status.fail(format!("Capture du jeu impossible : {e}"));
                     std::thread::sleep(Duration::from_secs(2));
                 }
@@ -653,6 +783,17 @@ mod platform {
                 slot.clear();
                 *status.info.lock() = Some("En attente d'un jeu en plein écran".into());
             }
+        });
+    }
+
+    /// Son du PC (hors MyStream) dans la piste d'une source « Capture d'écran ».
+    pub fn pc_audio(status: Arc<Status>, track: Arc<Track>) {
+        let stop = process_audio_mode(std::process::id(), false, status.clone(), track);
+        std::thread::spawn(move || {
+            while !status.stopped() {
+                std::thread::sleep(Duration::from_millis(200));
+            }
+            stop.store(true, Ordering::Relaxed);
         });
     }
 
@@ -821,7 +962,11 @@ mod platform {
         status.fail(format!("Capture de fenêtre (« {title} ») disponible sous Windows uniquement"));
     }
 
-    pub fn start_game(_fps: u32, _slot: Slot, status: Arc<Status>, _track: Option<Arc<Track>>) {
+    pub fn pc_audio(_status: Arc<Status>, track: Arc<Track>) {
+        track.fail("Le son du PC n'est capturé que sous Windows.");
+    }
+
+    pub fn start_game(_fps: u32, _screen: bool, _slot: Slot, status: Arc<Status>, _track: Option<Arc<Track>>) {
         status.fail("Capture de jeu disponible sous Windows uniquement".into());
     }
 

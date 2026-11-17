@@ -26,9 +26,16 @@ struct Params {
     color: vec4<f32>,
     // rgb : couleur clé, w : incrustation active
     key: vec4<f32>,
-    // x : similarité, y : lissage
+    // x : similarité, y : lissage, z : teinte (radians)
     key2: vec4<f32>,
 };
+
+// Rotation de la teinte autour de l'axe des gris (comme le filtre « Teinte » de la version Electron).
+fn hue_rotate(c: vec3<f32>, a: f32) -> vec3<f32> {
+    let k = vec3<f32>(0.57735);
+    let cs = cos(a);
+    return c * cs + cross(k, c) * sin(a) + k * dot(k, c) * (1.0 - cs);
+}
 
 @group(0) @binding(0) var tex: texture_2d<f32>;
 @group(0) @binding(1) var samp: sampler;
@@ -58,6 +65,9 @@ fn fs_quad(i: VOut) -> @location(0) vec4<f32> {
         // Atténue le reflet de la couleur clé sur les bords du sujet.
         let spill = 1.0 - smoothstep(p.key2.x, p.key2.x + p.key2.y * 4.0, d);
         rgb = mix(rgb, vec3<f32>(dot(rgb, vec3<f32>(0.299, 0.587, 0.114))), spill * 0.6);
+    }
+    if (p.key2.z != 0.0) {
+        rgb = hue_rotate(rgb, p.key2.z);
     }
     rgb = (rgb - 0.5) * p.color.z + 0.5 + p.color.y;
     let l = dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
@@ -463,7 +473,7 @@ impl Compositor {
             params.push(Params {
                 color: [alpha, f.brightness, f.contrast, f.saturation],
                 key: [k[0], k[1], k[2], if f.chroma { 1.0 } else { 0.0 }],
-                key2: [f.similarity * 0.5, f.smoothness.max(0.001) * 0.5, 0.0, 0.0],
+                key2: [f.similarity * 0.5, f.smoothness.max(0.001) * 0.5, f.hue.to_radians(), 0.0],
                 _pad: [0.0; 52],
             });
             draws.push((item.source, (params.len() - 1) as u32));

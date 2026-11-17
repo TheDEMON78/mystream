@@ -186,8 +186,12 @@ impl Default for Settings {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum SourceKind {
-    /// Écran entier (index de l'écran).
-    Display { monitor: usize },
+    /// Écran entier (index de l'écran) ; avec `audio`, le son du PC (hors MyStream).
+    Display {
+        monitor: usize,
+        #[serde(default)]
+        audio: bool,
+    },
     /// Fenêtre d'une application, retrouvée par son titre ; son son peut être capturé.
     Window {
         title: String,
@@ -198,6 +202,9 @@ pub enum SourceKind {
     Game {
         #[serde(default = "yes")]
         audio: bool,
+        /// "screen" : l'écran du jeu (le plus fluide) ; "window" : la fenêtre du jeu.
+        #[serde(default = "screen")]
+        method: String,
     },
     /// Image fixe (PNG, JPEG…).
     Image { path: String },
@@ -212,6 +219,21 @@ pub enum SourceKind {
         background: [u8; 4],
         #[serde(default)]
         mono: bool,
+        #[serde(default = "arial")]
+        font: String,
+        #[serde(default)]
+        bold: bool,
+        #[serde(default)]
+        italic: bool,
+        /// "left", "center" ou "right".
+        #[serde(default = "left")]
+        align: String,
+        #[serde(default)]
+        outline: bool,
+        #[serde(default = "black")]
+        outline_color: [u8; 4],
+        #[serde(default = "three")]
+        outline_size: f32,
     },
     /// Fichier vidéo ou audio, lu en boucle.
     Media {
@@ -223,6 +245,12 @@ pub enum SourceKind {
     Camera { device: String, width: u32, height: u32, fps: u32 },
     /// Son d'une application seule (Discord, navigateur…), sans image.
     AppAudio { exe: String },
+    /// Micro ou autre entrée audio (vide : celle par défaut), avec suppression du bruit.
+    AudioInput {
+        device: String,
+        #[serde(default)]
+        noise_suppression: bool,
+    },
     /// Chat du live incrusté dans l'image.
     Chat(ChatStyle),
     /// Page web (alertes, widgets) avec sa transparence et son son.
@@ -303,6 +331,21 @@ pub fn browser_css() -> String {
 fn yes() -> bool {
     true
 }
+fn screen() -> String {
+    "screen".into()
+}
+fn arial() -> String {
+    "Arial".into()
+}
+fn left() -> String {
+    "left".into()
+}
+fn black() -> [u8; 4] {
+    [0, 0, 0, 255]
+}
+fn three() -> f32 {
+    3.0
+}
 
 impl SourceKind {
     pub fn label(&self) -> &'static str {
@@ -316,6 +359,7 @@ impl SourceKind {
             SourceKind::Media { .. } => "Média",
             SourceKind::Camera { .. } => "Caméra",
             SourceKind::AppAudio { .. } => "Son d'une application",
+            SourceKind::AudioInput { .. } => "Entrée audio",
             SourceKind::Chat { .. } => "Chat",
             SourceKind::Browser { .. } => "Navigateur",
         }
@@ -331,6 +375,7 @@ impl SourceKind {
             SourceKind::Media { .. } => "🎞",
             SourceKind::Camera { .. } => "📷",
             SourceKind::AppAudio { .. } => "🎵",
+            SourceKind::AudioInput { .. } => "🎤",
             SourceKind::Chat { .. } => "💬",
             SourceKind::Browser { .. } => "🌐",
         }
@@ -338,9 +383,26 @@ impl SourceKind {
     /// Sources qui produisent du son (piste dans le mixeur).
     pub fn has_audio(&self) -> bool {
         match self {
-            SourceKind::Window { audio, .. } | SourceKind::Game { audio } | SourceKind::Browser { audio, .. } => *audio,
-            SourceKind::Media { .. } | SourceKind::AppAudio { .. } => true,
+            SourceKind::Window { audio, .. } | SourceKind::Game { audio, .. } | SourceKind::Browser { audio, .. } | SourceKind::Display { audio, .. } => *audio,
+            SourceKind::Media { .. } | SourceKind::AppAudio { .. } | SourceKind::AudioInput { .. } => true,
             _ => false,
+        }
+    }
+    /// Texte avec les réglages par défaut (police Arial, contour noir désactivé).
+    pub fn text(text: &str, size: f32, rgba: [u8; 4]) -> Self {
+        SourceKind::Text {
+            text: text.into(),
+            size,
+            rgba,
+            background: [0, 0, 0, 0],
+            mono: false,
+            font: arial(),
+            bold: false,
+            italic: false,
+            align: left(),
+            outline: false,
+            outline_color: black(),
+            outline_size: 3.0,
         }
     }
     /// Sources qui occupent un appareil ou du calcul : arrêtées quand elles ne sont plus affichées.
@@ -354,11 +416,12 @@ impl SourceKind {
                 | SourceKind::Media { .. }
                 | SourceKind::Browser { .. }
                 | SourceKind::AppAudio { .. }
+                | SourceKind::AudioInput { .. }
         )
     }
     /// Sources sans image.
     pub fn audio_only(&self) -> bool {
-        matches!(self, SourceKind::AppAudio { .. })
+        matches!(self, SourceKind::AppAudio { .. } | SourceKind::AudioInput { .. })
     }
 }
 
@@ -372,6 +435,8 @@ pub struct Filters {
     pub brightness: f32,
     pub contrast: f32,
     pub saturation: f32,
+    /// Teinte : rotation des couleurs en degrés (-180 à 180).
+    pub hue: f32,
     /// Recadrage en pixels de la source : gauche, haut, droite, bas.
     pub crop: [u32; 4],
     pub flip_h: bool,
@@ -390,6 +455,7 @@ impl Default for Filters {
             brightness: 0.0,
             contrast: 1.0,
             saturation: 1.0,
+            hue: 0.0,
             crop: [0; 4],
             flip_h: false,
             flip_v: false,
@@ -469,10 +535,20 @@ pub struct Item {
     pub y: f32,
     /// Échelle (1 = taille d'origine) ; None tant que la taille de la source est inconnue.
     pub scale: Option<f32>,
+    /// Échelle verticale différente (« Étirer à l'écran ») ; None : la même que `scale`.
+    #[serde(default)]
+    pub scale_y: Option<f32>,
     pub visible: bool,
     /// Verrouillé : ne se déplace pas par erreur dans l'aperçu.
     #[serde(default)]
     pub locked: bool,
+}
+
+impl Item {
+    /// Échelles horizontale et verticale.
+    pub fn scales(&self) -> Option<(f32, f32)> {
+        self.scale.map(|s| (s, self.scale_y.unwrap_or(s)))
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -481,6 +557,9 @@ pub struct Scene {
     pub name: String,
     /// Du premier plan à l'arrière-plan, comme dans OBS.
     pub items: Vec<Item>,
+    /// Transition pour passer à cette scène (sinon celle du dock Transitions).
+    #[serde(default)]
+    pub transition: Option<Transition>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -499,7 +578,7 @@ impl Default for Project {
     fn default() -> Self {
         let mut p = Self { settings: Settings::default(), sources: vec![], scenes: vec![], current: 0, preview: 0, next_id: 1 };
         let id = p.new_id();
-        p.scenes.push(Scene { id, name: "Scène".into(), items: vec![] });
+        p.scenes.push(Scene { id, name: "Scène".into(), items: vec![], transition: None });
         p.current = id;
         p
     }
@@ -617,7 +696,7 @@ impl Project {
             audio_filters: AudioFilters::default(),
             monitor: false,
         });
-        let item = Item { id: self.new_id(), source: id, x: 0.0, y: 0.0, scale: None, visible: true, locked: false };
+        let item = Item { id: self.new_id(), source: id, x: 0.0, y: 0.0, scale: None, scale_y: None, visible: true, locked: false };
         let edit = self.edit_scene();
         if let Some(scene) = self.scene_mut(edit) {
             scene.items.insert(0, item);
@@ -632,7 +711,7 @@ impl Project {
 
     /// Ajoute une source existante (partagée) à une scène.
     pub fn add_existing(&mut self, scene: u64, source: u64) {
-        let item = Item { id: self.new_id(), source, x: 0.0, y: 0.0, scale: None, visible: true, locked: false };
+        let item = Item { id: self.new_id(), source, x: 0.0, y: 0.0, scale: None, scale_y: None, visible: true, locked: false };
         if let Some(s) = self.scene_mut(scene) {
             s.items.insert(0, item);
         }
@@ -670,14 +749,42 @@ impl Project {
         }
         let new = self.new_id();
         let pos = self.scenes.iter().position(|s| s.id == id).map(|p| p + 1).unwrap_or(self.scenes.len());
-        self.scenes.insert(pos, Scene { id: new, name, items });
+        self.scenes.insert(pos, Scene { id: new, name, items, transition: self.scene(id).and_then(|s| s.transition.clone()) });
         Some(new)
+    }
+
+    /// « Rendre indépendante dans cette scène » : l'élément reçoit sa propre copie de la source.
+    pub fn unlink_item(&mut self, scene: u64, item: u64) {
+        let Some(source) = self.scene(scene).and_then(|s| s.items.iter().find(|i| i.id == item)).map(|i| i.source) else { return };
+        let Some(src) = self.source(source).cloned() else { return };
+        let scene_name = self.scene(scene).map(|s| s.name.clone()).unwrap_or_default();
+        let sid = self.new_id();
+        let name = self.unique_name(&format!("{} ({scene_name})", src.name), self.sources.iter().map(|s| s.name.clone()));
+        self.sources.push(Source { id: sid, name, ..src });
+        if let Some(it) = self.scene_mut(scene).and_then(|s| s.items.iter_mut().find(|i| i.id == item)) {
+            it.source = sid;
+        }
+        self.drop_unused_sources();
+    }
+
+    /// « Utiliser une source existante » : l'élément affiche une autre source (partagée).
+    pub fn link_item(&mut self, scene: u64, item: u64, source: u64) {
+        if let Some(it) = self.scene_mut(scene).and_then(|s| s.items.iter_mut().find(|i| i.id == item)) {
+            it.source = source;
+        }
+        self.drop_unused_sources();
+    }
+
+    /// Supprime les sources qui ne sont plus dans aucune scène.
+    fn drop_unused_sources(&mut self) {
+        let used: std::collections::HashSet<u64> = self.scenes.iter().flat_map(|s| s.items.iter().map(|i| i.source)).collect();
+        self.sources.retain(|s| used.contains(&s.id));
     }
 
     pub fn add_scene(&mut self) -> u64 {
         let id = self.new_id();
         let name = self.unique_name("Scène", self.scenes.iter().map(|s| s.name.clone()));
-        self.scenes.push(Scene { id, name, items: vec![] });
+        self.scenes.push(Scene { id, name, items: vec![], transition: None });
         id
     }
 

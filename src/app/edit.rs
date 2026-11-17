@@ -215,14 +215,16 @@ impl App {
                 ui.label("Échelle");
                 let mut pct = item.scale.unwrap_or(1.0) * 100.0;
                 if ui.add(egui::DragValue::new(&mut pct).range(1.0..=1000.0).speed(0.5).suffix(" %")).changed() {
+                    let k = pct / 100.0 / item.scale.unwrap_or(1.0).max(1e-6);
+                    item.scale_y = item.scale_y.map(|y| y * k);
                     item.scale = Some(pct / 100.0);
                     changed = true;
                 }
                 ui.end_row();
                 if w > 0 {
-                    let s = item.scale.unwrap_or(1.0);
+                    let (sx, sy) = item.scales().unwrap_or((1.0, 1.0));
                     ui.label("Taille affichée");
-                    ui.label(RichText::new(format!("{:.0} × {:.0} px (source {w} × {h})", w as f32 * s, h as f32 * s)).color(theme::MUTED));
+                    ui.label(RichText::new(format!("{:.0} × {:.0} px (source {w} × {h})", w as f32 * sx, h as f32 * sy)).color(theme::MUTED));
                     ui.end_row();
                 }
                 ui.label("Verrouillé");

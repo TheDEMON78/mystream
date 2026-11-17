@@ -27,6 +27,7 @@ fontdue = "0.9.5"
 global-hotkey = "0.10.0"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
 log = "0.4.35"
+nnnoiseless = { version = "0.5.2", default-features = false }
 parking_lot = "0.13.0"
 pollster = "1.0.1"
 resvg = { version = "0.45", default-features = false }

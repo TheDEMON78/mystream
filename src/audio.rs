@@ -132,7 +132,71 @@ impl Converter {
 }
 
 /// Ouvre un appareil cpal (entrée, ou sortie en boucle WASAPI) vers une piste.
+/// Suppression du bruit (RNNoise) d'un son stéréo 48 kHz : traité en mono, par blocs de 10 ms.
+pub struct Denoiser {
+    state: Box<nnnoiseless::DenoiseState<'static>>,
+    input: Vec<f32>,
+    out: Vec<f32>,
+}
+
+impl Default for Denoiser {
+    fn default() -> Self {
+        Self { state: nnnoiseless::DenoiseState::new(), input: Vec::new(), out: vec![0.0; nnnoiseless::DenoiseState::FRAME_SIZE] }
+    }
+}
+
+impl Denoiser {
+    /// Ajoute du son et renvoie le son débruité disponible (stéréo entrelacé).
+    pub fn process(&mut self, stereo: &[f32], result: &mut Vec<f32>) {
+        // RNNoise attend des valeurs à l'échelle des entiers 16 bits.
+        self.input.extend(stereo.chunks_exact(2).map(|c| (c[0] + c[1]) * 0.5 * 32768.0));
+        let n = nnnoiseless::DenoiseState::FRAME_SIZE;
+        let mut done = 0;
+        while self.input.len() - done >= n {
+            self.state.process_frame(&mut self.out, &self.input[done..done + n]);
+            for v in &self.out {
+                let v = v / 32768.0;
+                result.extend([v, v]);
+            }
+            done += n;
+        }
+        self.input.drain(..done);
+    }
+}
+
+/// Noms des micros et entrées audio.
+pub fn input_devices() -> Vec<String> {
+    let host = cpal::default_host();
+    host.input_devices().map(|d| d.filter_map(|d| d.description().ok().map(|x| x.name().to_string())).collect()).unwrap_or_default()
+}
+
+/// Source « Entrée audio » : un micro choisi (vide : celui par défaut), éventuellement débruité.
+pub fn start_input(device: String, denoise: bool, track: Arc<Track>, stop: Arc<std::sync::atomic::AtomicBool>) {
+    // Le flux cpal reste dans son fil (il n'est pas transférable sous tous les systèmes).
+    std::thread::spawn(move || {
+        let host = cpal::default_host();
+        let dev = if device.is_empty() {
+            host.default_input_device()
+        } else {
+            host.input_devices().ok().and_then(|mut d| d.find(|d| d.description().is_ok_and(|x| x.name() == device)))
+        };
+        if dev.is_none() && !device.is_empty() {
+            track.fail(format!("« {device} » introuvable : est-il branché ?"));
+            return;
+        }
+        let stream = open_device_with(track.clone(), "Entrée audio", dev, denoise);
+        while stream.is_some() && !stop.load(std::sync::atomic::Ordering::Relaxed) {
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        drop(stream);
+    });
+}
+
 fn open_device(track: Arc<Track>, name: &str, device: Option<cpal::Device>) -> Option<cpal::Stream> {
+    open_device_with(track, name, device, false)
+}
+
+fn open_device_with(track: Arc<Track>, name: &str, device: Option<cpal::Device>, denoise: bool) -> Option<cpal::Stream> {
     let result = (|| -> Result<cpal::Stream, String> {
         let device = device.ok_or("aucun appareil trouvé")?;
         let config = device.default_input_config().or_else(|_| device.default_output_config()).map_err(|e| e.to_string())?;
@@ -143,13 +207,23 @@ fn open_device(track: Arc<Track>, name: &str, device: Option<cpal::Device>) -> O
         let t3 = track.clone();
         let on_error = move |e: cpal::Error| *t3.error.lock() = Some(e.to_string());
         let mut buf = Vec::new();
+        let mut clean = Vec::new();
+        let mut denoiser = denoise.then(Denoiser::default);
+        let mut push = move |buf: &[f32]| match denoiser.as_mut() {
+            Some(d) => {
+                clean.clear();
+                d.process(buf, &mut clean);
+                t2.push(&clean);
+            }
+            None => t2.push(buf),
+        };
         let stream = match format {
             cpal::SampleFormat::F32 => device.build_input_stream::<f32, _, _>(
                 config,
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
                     buf.clear();
                     conv.convert(data, &mut buf);
-                    t2.push(&buf);
+                    push(&buf);
                 },
                 on_error,
                 None,
@@ -160,7 +234,7 @@ fn open_device(track: Arc<Track>, name: &str, device: Option<cpal::Device>) -> O
                     let f: Vec<f32> = data.iter().map(|s| *s as f32 / 32768.0).collect();
                     buf.clear();
                     conv.convert(&f, &mut buf);
-                    t2.push(&buf);
+                    push(&buf);
                 },
                 on_error,
                 None,

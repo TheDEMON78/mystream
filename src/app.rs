@@ -283,8 +283,9 @@ impl App {
                     changed = true;
                     (cw / vw).min(ch / vh).min(1.0)
                 });
+                let sy = item.scale_y.unwrap_or(scale);
                 if item.visible {
-                    list.push(DrawItem { source: item.source, x: item.x, y: item.y, w: vw * scale, h: vh * scale, filters: f, alpha: 1.0 });
+                    list.push(DrawItem { source: item.source, x: item.x, y: item.y, w: vw * scale, h: vh * sy, filters: f, alpha: 1.0 });
                 }
             }
         }
@@ -423,15 +424,20 @@ impl App {
         match what {
             "fit" => {
                 let s = (cw / w).min(ch / h);
-                item.scale = Some(s);
+                (item.scale, item.scale_y) = (Some(s), None);
                 item.x = (cw - w * s) / 2.0;
                 item.y = (ch - h * s) / 2.0;
             }
-            "original" => item.scale = Some(1.0),
+            // Étirer : remplit tout le canevas, quitte à déformer l'image.
+            "stretch" => {
+                (item.scale, item.scale_y) = (Some(cw / w), Some(ch / h));
+                (item.x, item.y) = (0.0, 0.0);
+            }
+            "original" => (item.scale, item.scale_y) = (Some(1.0), None),
             "center" => {
-                let s = item.scale.unwrap_or(1.0);
-                item.x = (cw - w * s) / 2.0;
-                item.y = (ch - h * s) / 2.0;
+                let (sx, sy) = item.scales().unwrap_or((1.0, 1.0));
+                item.x = (cw - w * sx) / 2.0;
+                item.y = (ch - h * sy) / 2.0;
             }
             _ => {}
         }
@@ -673,6 +679,7 @@ impl App {
                 }
                 let mut toggle = None;
                 let mut lock = None;
+                let mut menu: Option<(u64, String)> = None;
                 for (item, source, visible, locked) in &items {
                     let Some(src) = self.project.source(*source) else { continue };
                     let rt = self.runtimes.get(source);
@@ -710,6 +717,55 @@ impl App {
                             self.selected = Some(*item);
                             self.props_window = true;
                         }
+                        // Clic droit : le menu de la version Electron.
+                        let kind_label = src.kind.label();
+                        let candidates: Vec<(u64, String)> = self
+                            .project
+                            .sources
+                            .iter()
+                            .filter(|s| s.id != *source && s.kind.label() == kind_label)
+                            .map(|s| (s.id, s.name.clone()))
+                            .collect();
+                        r.context_menu(|ui| {
+                            let chosen = std::cell::RefCell::new(None::<String>);
+                            let pick = |ui: &mut egui::Ui, text: &str, action: &str| {
+                                if ui.button(text).clicked() {
+                                    *chosen.borrow_mut() = Some(action.to_string());
+                                    ui.close();
+                                }
+                            };
+                            pick(ui, "Propriétés et filtres…", "props");
+                            ui.separator();
+                            pick(ui, "Ajuster à l'écran", "fit");
+                            pick(ui, "Étirer à l'écran", "stretch");
+                            pick(ui, "Centrer à l'écran", "center");
+                            pick(ui, "Taille d'origine", "original");
+                            pick(ui, "Modifier la transformation…", "transform");
+                            ui.separator();
+                            pick(ui, "Monter", "up");
+                            pick(ui, "Descendre", "down");
+                            pick(ui, if *locked { "Déverrouiller" } else { "Verrouiller" }, "lock");
+                            ui.separator();
+                            if shared {
+                                ui.label(RichText::new("🔗 Partagée avec d'autres scènes").small().color(theme::MUTED));
+                                pick(ui, "Rendre indépendante dans cette scène", "unlink");
+                            }
+                            if !candidates.is_empty() {
+                                ui.menu_button("Utiliser une source existante", |ui| {
+                                    for (id, name) in &candidates {
+                                        if ui.button(name).clicked() {
+                                            *chosen.borrow_mut() = Some(format!("link:{id}"));
+                                            ui.close();
+                                        }
+                                    }
+                                });
+                            }
+                            ui.separator();
+                            pick(ui, "Supprimer", "remove");
+                            if let Some(a) = chosen.into_inner() {
+                                menu = Some((*item, a));
+                            }
+                        });
                         if theme::tool(ui, if *visible { "👁" } else { "⊘" }, if *visible { "Masquer" } else { "Afficher" }) {
                             toggle = Some(*item);
                         }
@@ -723,6 +779,36 @@ impl App {
                     });
                     if let Some(i) = info {
                         ui.label(RichText::new(format!("      {i}")).small().color(theme::MUTED));
+                    }
+                }
+                if let Some((id, action)) = menu {
+                    self.selected = Some(id);
+                    match action.as_str() {
+                        "props" => self.props_window = true,
+                        "transform" => self.transform_open = true,
+                        "lock" => lock = Some(id),
+                        "unlink" => {
+                            self.project.unlink_item(scene_id, id);
+                            self.touch();
+                        }
+                        "up" | "down" => {
+                            if let Some(scene) = self.project.scene_mut(scene_id)
+                                && let Some(i) = scene.items.iter().position(|it| it.id == id)
+                            {
+                                let j = if action == "up" { i.checked_sub(1) } else { (i + 1 < scene.items.len()).then_some(i + 1) };
+                                if let Some(j) = j {
+                                    scene.items.swap(i, j);
+                                    self.touch();
+                                }
+                            }
+                        }
+                        a if a.starts_with("link:") => {
+                            if let Ok(src) = a[5..].parse() {
+                                self.project.link_item(scene_id, id, src);
+                                self.touch();
+                            }
+                        }
+                        other => self.item_action(other),
                     }
                 }
                 if let Some(id) = lock
@@ -1147,13 +1233,13 @@ impl App {
             && ui.button("🎮 Capture de jeu (automatique)").on_hover_text("Capture le jeu en plein écran, avec son son, sans rien choisir").clicked()
         {
             ui.close();
-            self.add("Capture de jeu", SourceKind::Game { audio: true });
+            self.add("Capture de jeu", SourceKind::Game { audio: true, method: "screen".into() });
         }
         ui.menu_button("🖥 Capture d'écran", |ui| {
             for m in capture::monitors() {
                 if ui.button(&m.name).clicked() {
                     ui.close();
-                    self.add("Capture d'écran", SourceKind::Display { monitor: m.index });
+                    self.add("Capture d'écran", SourceKind::Display { monitor: m.index, audio: false });
                 }
             }
         });
@@ -1187,7 +1273,11 @@ impl App {
         });
         if ui.button("T Texte").clicked() {
             ui.close();
-            self.add("Texte", SourceKind::Text { text: "Votre texte".into(), size: 72.0, rgba: [255, 255, 255, 255], background: [0, 0, 0, 0], mono: false });
+            let mut kind = SourceKind::text("Votre texte", 72.0, [255, 255, 255, 255]);
+            if let SourceKind::Text { bold, outline, .. } = &mut kind {
+                (*bold, *outline) = (true, true);
+            }
+            self.add("Texte", kind);
         }
         if ui.button("🖼 Image…").clicked() {
             ui.close();
@@ -1216,6 +1306,19 @@ impl App {
             let (w, h) = self.canvas;
             self.add("Couleur", SourceKind::Color { rgba: [0x2a, 0x1f, 0x4d, 255], width: w, height: h });
         }
+        ui.menu_button("🎤 Entrée audio (micro…)", |ui| {
+            if ui.button("Par défaut").clicked() {
+                ui.close();
+                self.add("Entrée audio", SourceKind::AudioInput { device: String::new(), noise_suppression: false });
+            }
+            for d in crate::audio::input_devices() {
+                if ui.button(&d).clicked() {
+                    ui.close();
+                    let name: String = d.chars().take(40).collect();
+                    self.add(&name, SourceKind::AudioInput { device: d.clone(), noise_suppression: false });
+                }
+            }
+        });
         if cfg!(windows) {
             ui.menu_button("🎵 Son d'une application", |ui| {
                 ui.label(RichText::new("Discord, navigateur, lecteur de musique… même en arrière-plan").small().weak());
@@ -1293,16 +1396,44 @@ impl App {
                     changed = true;
                 }
             }
-            SourceKind::Text { text, size, rgba, background, mono } => {
+            SourceKind::Text { text, size, rgba, background, mono, font, bold, italic, align, outline, outline_color, outline_size } => {
                 changed |= ui.add(egui::TextEdit::multiline(text).desired_rows(2)).changed();
-                changed |= ui.add(egui::Slider::new(size, 8.0..=300.0).text("Taille")).changed();
+                egui::ComboBox::from_label("Police").selected_text(if *mono { "Chasse fixe" } else { font.as_str() }).show_ui(ui, |ui| {
+                    for (f, _, _) in crate::model::CHAT_FONTS {
+                        if ui.selectable_label(!*mono && font == f, f).clicked() {
+                            (*font, *mono) = (f.to_string(), false);
+                            changed = true;
+                        }
+                    }
+                    if ui.selectable_label(*mono, "Chasse fixe").clicked() {
+                        *mono = true;
+                        changed = true;
+                    }
+                });
+                changed |= ui.add(egui::Slider::new(size, 4.0..=400.0).text("Taille")).changed();
                 ui.horizontal(|ui| {
                     ui.label("Couleur");
                     changed |= color(ui, rgba);
                     ui.label("Fond");
                     changed |= color(ui, background);
                 });
-                changed |= ui.checkbox(mono, "Police à chasse fixe").changed();
+                ui.horizontal(|ui| {
+                    changed |= ui.checkbox(bold, "Gras").changed();
+                    changed |= ui.checkbox(italic, "Italique").changed();
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Alignement");
+                    for (v, l) in [("left", "Gauche"), ("center", "Centre"), ("right", "Droite")] {
+                        changed |= ui.selectable_value(align, v.to_string(), l).changed();
+                    }
+                });
+                ui.horizontal(|ui| {
+                    changed |= ui.checkbox(outline, "Contour").changed();
+                    if *outline {
+                        changed |= color(ui, outline_color);
+                        changed |= ui.add(egui::DragValue::new(outline_size).range(1.0..=40.0).suffix(" px")).changed();
+                    }
+                });
             }
             SourceKind::Media { path, looping } => {
                 ui.label(RichText::new(path.as_str()).small().weak());
@@ -1320,17 +1451,19 @@ impl App {
                         changed |= ui.selectable_value(device, c.clone(), c).changed();
                     }
                 });
-                egui::ComboBox::from_label("Résolution").selected_text(format!("{width} × {height}")).show_ui(ui, |ui| {
-                    for (w, h) in [(1920, 1080), (1280, 720), (640, 480)] {
-                        if ui.selectable_label(*width == w && *height == h, format!("{w} × {h}")).clicked() {
+                let res = |w: u32, h: u32| if w == 0 { "Par défaut".to_string() } else { format!("{w} × {h}") };
+                egui::ComboBox::from_label("Résolution").selected_text(res(*width, *height)).show_ui(ui, |ui| {
+                    for (w, h) in [(0, 0), (640, 480), (1280, 720), (1920, 1080), (2560, 1440), (3840, 2160)] {
+                        if ui.selectable_label(*width == w && *height == h, res(w, h)).clicked() {
                             (*width, *height) = (w, h);
                             changed = true;
                         }
                     }
                 });
-                egui::ComboBox::from_label("Images par seconde").selected_text(cam_fps.to_string()).show_ui(ui, |ui| {
-                    for f in [30, 60] {
-                        changed |= ui.selectable_value(cam_fps, f, f.to_string()).changed();
+                let rate = |f: u32| if f == 0 { "Par défaut".to_string() } else { f.to_string() };
+                egui::ComboBox::from_label("Images par seconde").selected_text(rate(*cam_fps)).show_ui(ui, |ui| {
+                    for f in [0, 30, 60] {
+                        changed |= ui.selectable_value(cam_fps, f, rate(f)).changed();
                     }
                 });
                 ui.label(format!("{fps:.0} images/s reçues"));
@@ -1339,12 +1472,34 @@ impl App {
                 changed |= ui.checkbox(audio, "Capturer le son de la fenêtre").changed();
                 ui.label(format!("{fps:.0} images/s capturées"));
             }
-            SourceKind::Game { audio } => {
+            SourceKind::Game { audio, method } => {
+                ui.label(
+                    RichText::new("Aucun réglage nécessaire : le jeu en plein écran ou en fenêtré sans bordure est détecté, avec son son. Pendant un Alt+Tab, la dernière image du jeu reste affichée.")
+                        .small()
+                        .color(theme::MUTED),
+                );
                 changed |= ui.checkbox(audio, "Capturer le son du jeu").changed();
+                let label = |m: &str| if m == "window" { "Fenêtre du jeu : pour un jeu qui ne couvre pas tout l'écran" } else { "Écran du jeu : la plus fluide (recommandée)" };
+                egui::ComboBox::from_label("Méthode").selected_text(label(method)).show_ui(ui, |ui| {
+                    for m in ["screen", "window"] {
+                        changed |= ui.selectable_value(method, m.to_string(), label(m)).changed();
+                    }
+                });
                 ui.label(format!("{fps:.0} images/s capturées"));
             }
-            SourceKind::Display { .. } => {
+            SourceKind::Display { audio, .. } => {
+                changed |= ui.checkbox(audio, "Capturer le son du PC (hors MyStream)").changed();
                 ui.label(format!("{fps:.0} images/s capturées"));
+            }
+            SourceKind::AudioInput { device, noise_suppression } => {
+                let label = |d: &str| if d.is_empty() { "Par défaut".to_string() } else { d.to_string() };
+                egui::ComboBox::from_label("Périphérique").selected_text(label(device)).show_ui(ui, |ui| {
+                    changed |= ui.selectable_value(device, String::new(), "Par défaut").changed();
+                    for d in crate::audio::input_devices() {
+                        changed |= ui.selectable_value(device, d.clone(), d).changed();
+                    }
+                });
+                changed |= ui.checkbox(noise_suppression, "Suppression du bruit (souffle, ventilateur, clavier)").changed();
             }
             SourceKind::AppAudio { exe } => {
                 ui.label(format!("Programme : {exe}"));
@@ -1417,6 +1572,7 @@ impl App {
                 changed |= ui.add(egui::Slider::new(&mut f.brightness, -0.5..=0.5).text("Luminosité")).changed();
                 changed |= ui.add(egui::Slider::new(&mut f.contrast, 0.0..=2.0).text("Contraste")).changed();
                 changed |= ui.add(egui::Slider::new(&mut f.saturation, 0.0..=2.0).text("Saturation")).changed();
+                changed |= ui.add(egui::Slider::new(&mut f.hue, -180.0..=180.0).text("Teinte (°)")).changed();
                 ui.label("Recadrage (pixels) : gauche, haut, droite, bas");
                 ui.horizontal(|ui| {
                     for v in f.crop.iter_mut() {
@@ -1454,12 +1610,12 @@ impl App {
         {
             ui.horizontal(|ui| {
                 if ui.button("Ajuster à l'écran").clicked() {
-                    item.scale = None;
+                    (item.scale, item.scale_y) = (None, None);
                     item.x = 0.0;
                     item.y = 0.0;
                 }
                 if ui.button("Taille d'origine").clicked() {
-                    item.scale = Some(1.0);
+                    (item.scale, item.scale_y) = (Some(1.0), None);
                 }
             });
         }
@@ -1483,8 +1639,8 @@ impl App {
         let item_rect = |it: &crate::model::Item| -> Option<Rect> {
             let (w, h) = *sizes.get(&it.source)?;
             let c = filters.get(&it.source).copied().unwrap_or([0; 4]);
-            let s = it.scale?;
-            Some(Rect::from_min_size(pos2(it.x, it.y), vec2(w.saturating_sub(c[0] + c[2]) as f32 * s, h.saturating_sub(c[1] + c[3]) as f32 * s)))
+            let (sx, sy) = it.scales()?;
+            Some(Rect::from_min_size(pos2(it.x, it.y), vec2(w.saturating_sub(c[0] + c[2]) as f32 * sx, h.saturating_sub(c[1] + c[3]) as f32 * sy)))
         };
         // Clic : sélection de l'élément visible le plus en avant sous le pointeur.
         if (resp.clicked() || resp.drag_started())
@@ -1515,9 +1671,11 @@ impl App {
                 && let (Some(s), Some(r)) = (item.scale, item_rect(item))
             {
                 let ns = (s * (1.0 + zoom * 0.0015)).clamp(0.02, 10.0);
-                item.x -= r.width() / s * (ns - s) / 2.0;
-                item.y -= r.height() / s * (ns - s) / 2.0;
+                let k = ns / s;
+                item.x -= r.width() * (k - 1.0) / 2.0;
+                item.y -= r.height() * (k - 1.0) / 2.0;
                 item.scale = Some(ns);
+                item.scale_y = item.scale_y.map(|y| y * k);
                 moved = true;
             }
             if let Some(r) = item_rect(item) {
