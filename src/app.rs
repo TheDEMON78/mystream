@@ -135,6 +135,7 @@ impl App {
             transform_open: false,
         };
         app.start_engine(&cc.egui_ctx);
+        crate::update::fix_shortcuts();
         app.chat.restart(&app.project.settings.chat, &app.project.settings.restream);
         app.apply_remote();
         // Tests automatiques : MYSTREAM_TEST_SETTINGS=<onglet> ouvre les paramètres.

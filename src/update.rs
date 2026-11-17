@@ -153,3 +153,55 @@ pub fn restart() {
         let _ = std::process::Command::new(exe).spawn();
     }
 }
+
+/// Logo des raccourcis Windows : les raccourcis créés avant que l'exécutable ait
+/// son logo gardent une icône vide (cache de Windows). Une fois, au lancement,
+/// le logo est posé à côté de l'exécutable et les raccourcis sont refaits avec lui.
+#[cfg(windows)]
+pub fn fix_shortcuts() {
+    std::thread::spawn(|| {
+        let Ok(exe) = std::env::current_exe() else { return };
+        let Some(dir) = exe.parent() else { return };
+        let ico = dir.join("MyStream.ico");
+        let marker = dirs::config_dir().unwrap_or_default().join("MyStream-natif").join("raccourcis-logo-v1");
+        if marker.exists() && ico.exists() {
+            return;
+        }
+        if std::fs::write(&ico, include_bytes!("../assets/icon.ico")).is_err() {
+            return;
+        }
+        let mut links = Vec::new();
+        if let Some(d) = dirs::data_dir() {
+            links.push(d.join("Microsoft").join("Windows").join("Start Menu").join("Programs").join("MyStream natif.lnk"));
+        }
+        if let Some(d) = dirs::desktop_dir() {
+            links.push(d.join("MyStream natif.lnk"));
+        }
+        let quote = |p: &std::path::Path| p.to_string_lossy().replace('\'', "''");
+        let mut script = String::from("$w = New-Object -ComObject WScript.Shell; ");
+        for l in links.iter().filter(|l| l.exists()) {
+            script += &format!(
+                "$s = $w.CreateShortcut('{}'); $s.TargetPath = '{}'; $s.IconLocation = '{},0'; $s.Save(); ",
+                quote(l),
+                quote(&exe),
+                quote(&ico)
+            );
+        }
+        use std::os::windows::process::CommandExt;
+        let ok = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .creation_flags(0x0800_0000) // pas de fenêtre de console
+            .status()
+            .is_ok_and(|s| s.success());
+        if ok {
+            unsafe {
+                windows::Win32::UI::Shell::SHChangeNotify(windows::Win32::UI::Shell::SHCNE_ASSOCCHANGED, windows::Win32::UI::Shell::SHCNF_IDLIST, None, None);
+            }
+            let _ = std::fs::write(&marker, b"ok");
+            log::info!("Logo des raccourcis mis à jour");
+        }
+    });
+}
+
+#[cfg(not(windows))]
+pub fn fix_shortcuts() {}

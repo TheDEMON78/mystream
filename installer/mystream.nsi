@@ -31,13 +31,19 @@ Section "MyStream"
   File "..\paquet\MyStream.exe"
   File "..\paquet\ffmpeg.exe"
   File "..\paquet\LISEZMOI.md"
+  File "/oname=MyStream.ico" "..\assets\icon.ico"
   WriteUninstaller "$INSTDIR\Desinstaller.exe"
-  CreateShortCut "$SMPROGRAMS\MyStream natif.lnk" "$INSTDIR\MyStream.exe"
-  CreateShortCut "$DESKTOP\MyStream natif.lnk" "$INSTDIR\MyStream.exe"
+  ; Raccourcis recréés avec le logo explicite (Windows garde sinon l'ancienne icône vide en cache).
+  Delete "$SMPROGRAMS\MyStream natif.lnk"
+  Delete "$DESKTOP\MyStream natif.lnk"
+  CreateShortCut "$SMPROGRAMS\MyStream natif.lnk" "$INSTDIR\MyStream.exe" "" "$INSTDIR\MyStream.ico" 0
+  CreateShortCut "$DESKTOP\MyStream natif.lnk" "$INSTDIR\MyStream.exe" "" "$INSTDIR\MyStream.ico" 0
+  ; Rafraîchit le cache des icônes de Windows.
+  System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\MyStreamNatif" "DisplayName" "MyStream natif"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\MyStreamNatif" "DisplayVersion" "${VERSION}"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\MyStreamNatif" "Publisher" "BloopStudio"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\MyStreamNatif" "DisplayIcon" "$INSTDIR\MyStream.exe"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\MyStreamNatif" "DisplayIcon" "$INSTDIR\MyStream.ico"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\MyStreamNatif" "UninstallString" '"$INSTDIR\Desinstaller.exe"'
 SectionEnd
 
@@ -47,6 +53,7 @@ Section "Uninstall"
   Delete "$INSTDIR\ffmpeg.exe"
   Delete "$INSTDIR\ffmpeg.old.exe"
   Delete "$INSTDIR\LISEZMOI.md"
+  Delete "$INSTDIR\MyStream.ico"
   Delete "$INSTDIR\Desinstaller.exe"
   RMDir "$INSTDIR"
   Delete "$SMPROGRAMS\MyStream natif.lnk"
