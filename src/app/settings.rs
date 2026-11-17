@@ -268,7 +268,11 @@ impl App {
         let hotkeys_changed = self.draft.hotkeys != s.hotkeys;
         let chat_changed = self.draft.chat != s.chat || self.draft.restream != s.restream;
         self.project.settings = self.draft.clone();
+        // Volumes et filtres : ceux du mixeur ; micro et son du bureau : ceux de l'onglet Audio.
+        let (mic_device, desktop_audio) = (self.draft.audio.mic_device.clone(), self.draft.audio.desktop_audio);
         self.project.settings.audio = audio;
+        self.project.settings.audio.mic_device = mic_device;
+        self.project.settings.audio.desktop_audio = desktop_audio;
         self.project.settings.transition = transition;
         self.project.settings.studio = studio;
         if video {
